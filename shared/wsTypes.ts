@@ -104,8 +104,8 @@ export const WS_EVENTS = {
   CONNECTION: "connection",
 } as const;
 
-// ─── Audio CDN URLs ──────────────────────────────────────────────────
+// ─── Audio URLs ──────────────────────────────────────────────────────
 export const AUDIO_URLS = {
-  track1: "https://d2xsxph8kpxj0f.cloudfront.net/310519663164713141/ixEgdfuDyepi8QqC7ArBgi/audio1_bell_fdaf639c.wav",
-  track2: "https://d2xsxph8kpxj0f.cloudfront.net/310519663164713141/ixEgdfuDyepi8QqC7ArBgi/audio2_drone_e80a2ddc.wav",
+  track1: "/audio/boing.mp3",
+  track2: "/audio/womp-womp.mp3",
 } as const;

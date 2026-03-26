@@ -216,13 +216,13 @@ export default function Receiver() {
                     id: 1,
                     playing: track1Playing,
                     playable: track1Playable,
-                    label: "Track 1 - Bell Tone",
+                    label: "Track 1 - Boing",
                   },
                   {
                     id: 2,
                     playing: track2Playing,
                     playable: track2Playable,
-                    label: "Track 2 - Drone",
+                    label: "Track 2 - Womp Womp",
                   },
                 ] as const).map((track) => (
                   <div

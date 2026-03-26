@@ -24,7 +24,10 @@ corepack pnpm start
 
 ## Zeabur 部署
 
-仓库已经包含 `zbpack.json`，Zeabur 会使用下面的命令：
+仓库同时包含 `zbpack.json` 和 `Dockerfile`。
+
+- 默认建议让 Zeabur 直接使用根目录 `Dockerfile` 部署，这样可以避免被识别成 Vite 静态站点。
+- 如果 Zeabur 明确使用 Node.js provider，再使用下面的命令：
 
 - Build: `corepack pnpm build`
 - Start: `corepack pnpm start`
@@ -32,10 +35,12 @@ corepack pnpm start
 部署时请按下面顺序处理：
 
 1. 在 Zeabur 创建一个 Node.js 服务并连接本仓库。
-2. 不需要额外环境变量。
-3. 把服务副本数保持为 `1`。
+2. 如果控制台里存在 `Output Directory`，保持为空，不要填写 `dist` 或 `dist/public`。
+3. 如果当前服务无法清空 `Output Directory`，新建一个服务并让它按仓库根目录 `Dockerfile` 部署。
+4. 不需要额外环境变量。
+5. 把服务副本数保持为 `1`。
    说明：当前 Socket.IO 状态存在内存中，多副本会让 controller 和 receiver 看不到彼此。
-4. 部署后先验证这几个点：
+6. 部署后先验证这几个点：
    - `GET /api/healthz`
    - `/controller` 和 `/receiver/:id` 的 WebSocket 能互通
 

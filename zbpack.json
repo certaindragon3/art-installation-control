@@ -1,0 +1,4 @@
+{
+  "build_command": "corepack pnpm build",
+  "start_command": "corepack pnpm start"
+}

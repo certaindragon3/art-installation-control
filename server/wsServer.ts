@@ -7,10 +7,18 @@ import {
   WS_EVENTS,
 } from "../shared/wsTypes";
 
+type InternalReceiverState = ReceiverState & {
+  socketId: string;
+  disconnectedAt: number | null;
+};
+
+const RECEIVER_RETENTION_MS = 10 * 60 * 1000;
+const RECEIVER_CLEANUP_INTERVAL_MS = 60 * 1000;
+
 /**
  * In-memory store of all receiver states, keyed by receiverId.
  */
-const receivers = new Map<string, ReceiverState & { socketId: string }>();
+const receivers = new Map<string, InternalReceiverState>();
 
 /**
  * Set of controller socket IDs for broadcasting receiver list updates.
@@ -18,6 +26,7 @@ const receivers = new Map<string, ReceiverState & { socketId: string }>();
 const controllers = new Set<string>();
 
 let io: Server;
+let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Create default receiver state for a newly registered receiver.
@@ -26,11 +35,12 @@ function createDefaultState(
   receiverId: string,
   label: string,
   socketId: string
-): ReceiverState & { socketId: string } {
+): InternalReceiverState {
   return {
     receiverId,
     label,
     socketId,
+    disconnectedAt: null,
     connected: true,
     audio: {
       track1: { playing: false, playable: true },
@@ -46,17 +56,50 @@ function createDefaultState(
  */
 function broadcastReceiverList() {
   const list = Array.from(receivers.values()).map(
-    ({ socketId, ...state }) => state
+    ({ socketId, disconnectedAt, ...state }) => state
   );
   Array.from(controllers).forEach((controllerId) => {
     io.to(controllerId).emit(WS_EVENTS.RECEIVER_LIST, { receivers: list });
   });
 }
 
+function removeDisconnectedReceivers(): string[] {
+  const removedIds: string[] = [];
+
+  Array.from(receivers.entries()).forEach(([receiverId, state]) => {
+    if (!state.connected) {
+      receivers.delete(receiverId);
+      removedIds.push(receiverId);
+    }
+  });
+
+  return removedIds;
+}
+
+function removeExpiredReceivers(now = Date.now()): string[] {
+  const removedIds: string[] = [];
+
+  Array.from(receivers.entries()).forEach(([receiverId, state]) => {
+    if (
+      state.disconnectedAt !== null &&
+      now - state.disconnectedAt >= RECEIVER_RETENTION_MS
+    ) {
+      receivers.delete(receiverId);
+      removedIds.push(receiverId);
+    }
+  });
+
+  return removedIds;
+}
+
 /**
  * Initialize the Socket.IO server and attach event handlers.
  */
 export function initWebSocket(httpServer: HttpServer): Server {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+  }
+
   io = new Server(httpServer, {
     cors: {
       origin: "*",
@@ -87,7 +130,14 @@ export function initWebSocket(httpServer: HttpServer): Server {
     socket.on(
       WS_EVENTS.REGISTER_RECEIVER,
       (data: ReceiverRegistration) => {
-        const { receiverId, label } = data;
+        const receiverId = data.receiverId.trim();
+        const label = data.label?.trim();
+
+        if (!receiverId || receiverId === "*") {
+          console.warn(`[WS] Rejected invalid receiver ID from ${socket.id}`);
+          return;
+        }
+
         const displayLabel = label || `Receiver ${receiverId}`;
 
         // Check if this receiver ID was previously registered
@@ -96,6 +146,8 @@ export function initWebSocket(httpServer: HttpServer): Server {
           // Reconnection: update socket ID and mark connected
           existing.socketId = socket.id;
           existing.connected = true;
+          existing.disconnectedAt = null;
+          existing.label = displayLabel;
           console.log(`[WS] Receiver reconnected: ${receiverId} (${socket.id})`);
         } else {
           // New receiver
@@ -111,7 +163,11 @@ export function initWebSocket(httpServer: HttpServer): Server {
 
         // Send current state back to the receiver
         const state = receivers.get(receiverId)!;
-        const { socketId: _sid, ...stateWithoutSocket } = state;
+        const {
+          socketId: _sid,
+          disconnectedAt: _disconnectedAt,
+          ...stateWithoutSocket
+        } = state;
         socket.emit(WS_EVENTS.RECEIVER_STATE_UPDATE, stateWithoutSocket);
 
         // Notify all controllers
@@ -149,6 +205,21 @@ export function initWebSocket(httpServer: HttpServer): Server {
       broadcastReceiverList();
     });
 
+    socket.on(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS, () => {
+      if (!controllers.has(socket.id)) {
+        console.warn(
+          `[WS] Ignored offline receiver cleanup from non-controller ${socket.id}`
+        );
+        return;
+      }
+
+      const removedIds = removeDisconnectedReceivers();
+      if (removedIds.length > 0) {
+        console.log(`[WS] Cleared offline receivers: ${removedIds.join(", ")}`);
+        broadcastReceiverList();
+      }
+    });
+
     // ─── Disconnect ────────────────────────────────────────────────
     socket.on(WS_EVENTS.DISCONNECT, () => {
       console.log(`[WS] Client disconnected: ${socket.id}`);
@@ -160,6 +231,7 @@ export function initWebSocket(httpServer: HttpServer): Server {
       Array.from(receivers.values()).forEach((state) => {
         if (state.socketId === socket.id) {
           state.connected = false;
+          state.disconnectedAt = Date.now();
           state.audio.track1.playing = false;
           state.audio.track2.playing = false;
         }
@@ -168,6 +240,14 @@ export function initWebSocket(httpServer: HttpServer): Server {
       broadcastReceiverList();
     });
   });
+
+  cleanupInterval = setInterval(() => {
+    const removedIds = removeExpiredReceivers();
+    if (removedIds.length > 0) {
+      console.log(`[WS] Expired offline receivers: ${removedIds.join(", ")}`);
+      broadcastReceiverList();
+    }
+  }, RECEIVER_CLEANUP_INTERVAL_MS);
 
   console.log("[WS] Socket.IO server initialized");
   return io;
@@ -178,7 +258,7 @@ export function initWebSocket(httpServer: HttpServer): Server {
  * This keeps the server as the single source of truth.
  */
 function applyCommand(
-  state: ReceiverState & { socketId: string },
+  state: InternalReceiverState,
   msg: ControlMessage
 ): void {
   switch (msg.type) {

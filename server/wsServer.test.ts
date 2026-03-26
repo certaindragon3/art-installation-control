@@ -15,6 +15,7 @@ describe("WebSocket Message Types", () => {
     expect(WS_EVENTS.REGISTER_RECEIVER).toBe("register_receiver");
     expect(WS_EVENTS.REGISTER_CONTROLLER).toBe("register_controller");
     expect(WS_EVENTS.CONTROL_MESSAGE).toBe("control_message");
+    expect(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS).toBe("clear_offline_receivers");
     expect(WS_EVENTS.RECEIVER_LIST).toBe("receiver_list");
     expect(WS_EVENTS.RECEIVER_COMMAND).toBe("receiver_command");
     expect(WS_EVENTS.RECEIVER_STATE_UPDATE).toBe("receiver_state_update");
@@ -23,11 +24,11 @@ describe("WebSocket Message Types", () => {
     expect(WS_EVENTS.CONNECTION).toBe("connection");
   });
 
-  it("should have valid audio CDN URLs", () => {
-    expect(AUDIO_URLS.track1).toMatch(/^https:\/\//);
-    expect(AUDIO_URLS.track2).toMatch(/^https:\/\//);
-    expect(AUDIO_URLS.track1).toContain("audio1_bell");
-    expect(AUDIO_URLS.track2).toContain("audio2_drone");
+  it("should have valid local audio asset URLs", () => {
+    expect(AUDIO_URLS.track1).toMatch(/^\/audio\//);
+    expect(AUDIO_URLS.track2).toMatch(/^\/audio\//);
+    expect(AUDIO_URLS.track1).toContain("boing");
+    expect(AUDIO_URLS.track2).toContain("womp-womp");
   });
 
   it("should validate audio_control message structure", () => {

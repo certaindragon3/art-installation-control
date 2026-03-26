@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useSocket } from "@/hooks/useSocket";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,6 +27,7 @@ import {
   VolumeX,
   Monitor,
   Zap,
+  Trash2,
 } from "lucide-react";
 import type { ControlMessage, ReceiverState } from "@shared/wsTypes";
 
@@ -37,16 +38,26 @@ const PRESET_COLORS = [
 ];
 
 export default function Controller() {
-  const { connected, receivers, sendCommand } = useSocket({
+  const { connected, receivers, sendCommand, clearOfflineReceivers } = useSocket({
     role: "controller",
   });
   const [selectedReceiver, setSelectedReceiver] = useState<string>("");
   const [textInput, setTextInput] = useState("");
   const [customColor, setCustomColor] = useState("#6366f1");
+  const offlineReceivers = receivers.filter((r) => !r.connected);
 
   const selectedState = receivers.find(
     (r) => r.receiverId === selectedReceiver
   );
+
+  useEffect(() => {
+    if (
+      selectedReceiver &&
+      !receivers.some((receiver) => receiver.receiverId === selectedReceiver)
+    ) {
+      setSelectedReceiver("");
+    }
+  }, [receivers, selectedReceiver]);
 
   const send = useCallback(
     (msg: Omit<ControlMessage, "timestamp">) => {
@@ -153,7 +164,21 @@ export default function Controller() {
                   </Badge>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">
+                    Offline receivers retained for 10 minutes after disconnect.
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={clearOfflineReceivers}
+                    disabled={offlineReceivers.length === 0}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1" />
+                    Clear Offline ({offlineReceivers.length})
+                  </Button>
+                </div>
                 {receivers.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <Radio className="w-8 h-8 mx-auto mb-2 opacity-40" />
@@ -427,6 +452,11 @@ function ReceiverCard({
       <div className="text-xs text-muted-foreground">
         ID: {receiver.receiverId}
       </div>
+      {!receiver.connected && (
+        <div className="mt-1 text-[11px] text-amber-600">
+          Offline, removable now or auto-cleared in 10 min
+        </div>
+      )}
       <div className="flex items-center gap-2 mt-2">
         <div
           className="w-3 h-3 rounded-full border border-border"

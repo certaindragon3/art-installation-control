@@ -92,6 +92,7 @@ export const WS_EVENTS = {
   REGISTER_RECEIVER: "register_receiver",
   REGISTER_CONTROLLER: "register_controller",
   CONTROL_MESSAGE: "control_message",
+  CLEAR_OFFLINE_RECEIVERS: "clear_offline_receivers",
 
   // Server → Client
   RECEIVER_LIST: "receiver_list",

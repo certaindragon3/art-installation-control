@@ -18,6 +18,7 @@ interface UseSocketReturn {
   receivers: ReceiverState[];
   receiverState: ReceiverState | null;
   sendCommand: (msg: ControlMessage) => void;
+  clearOfflineReceivers: () => void;
 }
 
 export function useSocket(options: UseSocketOptions): UseSocketReturn {
@@ -91,5 +92,17 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     }
   }, []);
 
-  return { connected, receivers, receiverState, sendCommand };
+  const clearOfflineReceivers = useCallback(() => {
+    if (socketRef.current?.connected && role === "controller") {
+      socketRef.current.emit(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS);
+    }
+  }, [role]);
+
+  return {
+    connected,
+    receivers,
+    receiverState,
+    sendCommand,
+    clearOfflineReceivers,
+  };
 }

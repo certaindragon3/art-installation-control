@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,13 +14,38 @@ import {
   MessageSquare,
 } from "lucide-react";
 
+const RECEIVER_ID_STORAGE_KEY = "art-installation:last-receiver-id";
+
 export default function Home() {
-  const [receiverId, setReceiverId] = useState("");
+  const [receiverId, setReceiverId] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    return window.localStorage.getItem(RECEIVER_ID_STORAGE_KEY) || "";
+  });
   const [, setLocation] = useLocation();
+  const trimmedReceiverId = receiverId.trim();
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (trimmedReceiverId) {
+      window.localStorage.setItem(
+        RECEIVER_ID_STORAGE_KEY,
+        trimmedReceiverId
+      );
+      return;
+    }
+
+    window.localStorage.removeItem(RECEIVER_ID_STORAGE_KEY);
+  }, [trimmedReceiverId]);
 
   const handleJoinAsReceiver = () => {
-    const id = receiverId.trim() || `r${Date.now().toString(36)}`;
-    setLocation(`/receiver/${id}`);
+    if (!trimmedReceiverId) return;
+    setLocation(`/receiver/${trimmedReceiverId}`);
   };
 
   return (
@@ -106,12 +131,16 @@ export default function Home() {
                     type="text"
                     value={receiverId}
                     onChange={(e) => setReceiverId(e.target.value)}
-                    placeholder="Enter Receiver ID (or leave blank for auto)"
+                    onKeyDown={(e) =>
+                      e.key === "Enter" && handleJoinAsReceiver()
+                    }
+                    placeholder="Enter Receiver ID"
                     className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <Button
                     className="w-full group-hover:bg-primary/90"
                     onClick={handleJoinAsReceiver}
+                    disabled={!trimmedReceiverId}
                   >
                     Join as Receiver
                     <ArrowRight className="w-4 h-4 ml-2" />

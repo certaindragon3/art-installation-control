@@ -26,6 +26,11 @@ The application exposes three main routes:
 - `/controller` for the operator dashboard
 - `/receiver/:id` for each receiver terminal
 
+Integration documentation:
+
+- [`docs/unity-controller-api.md`](./docs/unity-controller-api.md) for the production Unity integration guide, including the recommended HTTP controller API and optional Socket.IO details
+- [`docs/examples/UnityArtInstallationController.cs`](./docs/examples/UnityArtInstallationController.cs) for a minimal Unity HTTP client example
+
 Health checks are available at:
 
 - `/api/healthz`

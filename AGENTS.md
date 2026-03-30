@@ -2,8 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-This file is the source of truth for repository-specific agent instructions.
-[`AGENTS.md`](./AGENTS.md) should stay aligned with this file and carry the same operational guidance.
+This file is intentionally kept aligned with [`CLAUDE.md`](./CLAUDE.md).
+If the two files ever drift, treat [`CLAUDE.md`](./CLAUDE.md) as the source of truth and sync the same update back to `AGENTS.md`.
 
 ## 项目概述
 

@@ -25,7 +25,7 @@ const receivers = new Map<string, InternalReceiverState>();
  */
 const controllers = new Set<string>();
 
-let io: Server;
+let io: Server | null = null;
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -55,12 +55,23 @@ function createDefaultState(
  * Broadcast the current receiver list to all connected controllers.
  */
 function broadcastReceiverList() {
-  const list = Array.from(receivers.values()).map(
+  if (!io) {
+    return;
+  }
+
+  const socketServer = io;
+  const list = getReceiverList();
+  Array.from(controllers).forEach((controllerId) => {
+    socketServer.to(controllerId).emit(WS_EVENTS.RECEIVER_LIST, {
+      receivers: list,
+    });
+  });
+}
+
+export function getReceiverList(): ReceiverState[] {
+  return Array.from(receivers.values()).map(
     ({ socketId, disconnectedAt, ...state }) => state
   );
-  Array.from(controllers).forEach((controllerId) => {
-    io.to(controllerId).emit(WS_EVENTS.RECEIVER_LIST, { receivers: list });
-  });
 }
 
 function removeDisconnectedReceivers(): string[] {
@@ -120,10 +131,7 @@ export function initWebSocket(httpServer: HttpServer): Server {
       console.log(`[WS] Controller registered: ${socket.id}`);
 
       // Send current receiver list immediately
-      const list = Array.from(receivers.values()).map(
-        ({ socketId, ...state }) => state
-      );
-      socket.emit(WS_EVENTS.RECEIVER_LIST, { receivers: list });
+      socket.emit(WS_EVENTS.RECEIVER_LIST, { receivers: getReceiverList() });
     });
 
     // ─── Receiver Registration ─────────────────────────────────────
@@ -180,29 +188,7 @@ export function initWebSocket(httpServer: HttpServer): Server {
       console.log(
         `[WS] Control message: type=${msg.type}, target=${msg.targetId}`
       );
-
-      if (msg.targetId === "*") {
-        // Broadcast to all receivers
-        Array.from(receivers.entries()).forEach(([rid, state]) => {
-          applyCommand(state, msg);
-          io.to(`receiver:${rid}`).emit(WS_EVENTS.RECEIVER_COMMAND, msg);
-        });
-      } else {
-        // Targeted message
-        const state = receivers.get(msg.targetId);
-        if (state) {
-          applyCommand(state, msg);
-          io.to(`receiver:${msg.targetId}`).emit(
-            WS_EVENTS.RECEIVER_COMMAND,
-            msg
-          );
-        } else {
-          console.warn(`[WS] Target receiver not found: ${msg.targetId}`);
-        }
-      }
-
-      // Update controllers with new state
-      broadcastReceiverList();
+      dispatchControlMessage(msg);
     });
 
     socket.on(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS, () => {
@@ -213,10 +199,9 @@ export function initWebSocket(httpServer: HttpServer): Server {
         return;
       }
 
-      const removedIds = removeDisconnectedReceivers();
+      const removedIds = clearOfflineReceivers();
       if (removedIds.length > 0) {
         console.log(`[WS] Cleared offline receivers: ${removedIds.join(", ")}`);
-        broadcastReceiverList();
       }
     });
 
@@ -251,6 +236,85 @@ export function initWebSocket(httpServer: HttpServer): Server {
 
   console.log("[WS] Socket.IO server initialized");
   return io;
+}
+
+export interface DispatchControlResult {
+  broadcast: boolean;
+  deliveredReceiverIds: string[];
+  missingTargetId: string | null;
+}
+
+export function dispatchControlMessage(
+  msg: ControlMessage
+): DispatchControlResult {
+  if (!io) {
+    throw new Error("Socket.IO server not initialized");
+  }
+
+  if (msg.targetId === "*") {
+    const deliveredReceiverIds = Array.from(receivers.entries()).map(
+      ([receiverId, state]) => {
+        applyCommand(state, msg);
+        io!.to(`receiver:${receiverId}`).emit(WS_EVENTS.RECEIVER_COMMAND, msg);
+        return receiverId;
+      }
+    );
+
+    broadcastReceiverList();
+    return {
+      broadcast: true,
+      deliveredReceiverIds,
+      missingTargetId: null,
+    };
+  }
+
+  const state = receivers.get(msg.targetId);
+  if (!state) {
+    console.warn(`[WS] Target receiver not found: ${msg.targetId}`);
+    return {
+      broadcast: false,
+      deliveredReceiverIds: [],
+      missingTargetId: msg.targetId,
+    };
+  }
+
+  applyCommand(state, msg);
+  io.to(`receiver:${msg.targetId}`).emit(WS_EVENTS.RECEIVER_COMMAND, msg);
+  broadcastReceiverList();
+
+  return {
+    broadcast: false,
+    deliveredReceiverIds: [msg.targetId],
+    missingTargetId: null,
+  };
+}
+
+export function clearOfflineReceivers() {
+  const removedReceiverIds = removeDisconnectedReceivers();
+
+  if (removedReceiverIds.length > 0) {
+    broadcastReceiverList();
+  }
+
+  return removedReceiverIds;
+}
+
+export async function resetWebSocketState() {
+  controllers.clear();
+  receivers.clear();
+
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
+
+  if (io) {
+    const activeIo = io;
+    io = null;
+    await new Promise<void>((resolve) => {
+      activeIo.close(() => resolve());
+    });
+  }
 }
 
 /**

@@ -53,3 +53,10 @@ function startPulse(bpm: number) {
 - [ ] Fill bar 动画在 fillTime 内完成 0→1
 - [ ] Fill 到达 1 时触发 flash
 - [ ] fillTime 可由 Unity/Controller 配置
+
+## 测试建议（无 Unity 客户端）
+
+- 写服务端定时器测试，直接统计 pulse 间隔和长时间 drift，不要只靠肉眼看闪烁。
+- 在浏览器开多个 receiver 页面，观察 pulse、flash、fill bar 是否同步，重点看切标签页或性能波动时是否漂移。
+- 用 controller 或 HTTP 命令动态修改 BPM、开关 pulse、修改 `fillTime`，确认旧动画会被正确取消并重建。
+- 这一 phase 做完建议部署到 Zeabur，再做多设备同步测试，因为公网 websocket 更容易暴露节拍漂移问题。

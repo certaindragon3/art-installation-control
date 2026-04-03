@@ -1,112 +1,441 @@
 /**
- * WebSocket Message Types for Art Installation Control System
+ * Shared WebSocket and HTTP protocol types.
  *
- * All messages between Controller, Server, and Receiver follow these schemas.
+ * Phase 1 keeps the legacy control message structure for backward-compatible
+ * inputs, but the runtime architecture is driven by unified commands and full
+ * receiver config snapshots.
  */
 
-// ─── Message Type Enum ───────────────────────────────────────────────
+export type JsonRecord = Record<string, unknown>;
+
+// ─── Legacy Message Types ─────────────────────────────────────────────
 export type MessageType =
   | "audio_control"
   | "audio_playable"
   | "color_change"
   | "text_message";
 
-// ─── Audio Control ───────────────────────────────────────────────────
 export interface AudioControlPayload {
-  /** Which audio track: 1 or 2 */
   trackId: 1 | 2;
-  /** Action to perform */
   action: "play" | "pause";
 }
 
 export interface AudioPlayablePayload {
-  /** Which audio track: 1 or 2 */
   trackId: 1 | 2;
-  /** Whether the track is playable */
   playable: boolean;
 }
 
-// ─── Color Change ────────────────────────────────────────────────────
 export interface ColorChangePayload {
-  /** CSS color value, e.g. "#ff0000", "rgb(255,0,0)" */
   color: string;
 }
 
-// ─── Text Message ────────────────────────────────────────────────────
 export interface TextMessagePayload {
-  /** The text content to display */
   text: string;
 }
 
-// ─── Unified Payload Union ───────────────────────────────────────────
 export type MessagePayload =
   | AudioControlPayload
   | AudioPlayablePayload
   | ColorChangePayload
   | TextMessagePayload;
 
-// ─── Control Message (Controller → Server → Receiver) ────────────────
-export interface ControlMessage {
-  /** Message type identifier */
+export interface LegacyControlMessage {
   type: MessageType;
-  /** Target receiver ID. Use "*" for broadcast to all receivers. */
   targetId: string;
-  /** Message payload varies by type */
   payload: MessagePayload;
-  /** ISO 8601 timestamp */
   timestamp: string;
 }
 
-// ─── Server Events ───────────────────────────────────────────────────
+export type ControlMessage = LegacyControlMessage;
 
-/** Receiver registration info sent to server */
+// ─── Config Model ────────────────────────────────────────────────────
+export interface VisibilityConfig {
+  visible: boolean;
+  enabled: boolean;
+}
+
+export interface TrackState extends VisibilityConfig {
+  trackId: string;
+  label: string;
+  url: string;
+  playing: boolean;
+  playable: boolean;
+  loopEnabled: boolean;
+  loopControlVisible: boolean;
+  loopControlLocked: boolean;
+  volumeValue: number;
+  volumeControlVisible: boolean;
+  volumeControlEnabled: boolean;
+  tempoFlashEnabled: boolean;
+  fillTime: number;
+  groupId: string | null;
+}
+
+export interface GroupState extends VisibilityConfig {
+  groupId: string;
+  label: string;
+  color: string;
+  trackIds: string[];
+}
+
+export interface PulseConfig extends VisibilityConfig {
+  active: boolean;
+  bpm: number;
+}
+
+export interface VoteOption {
+  id: string;
+  label: string;
+}
+
+export interface VoteConfig extends VisibilityConfig {
+  title: string;
+  options: VoteOption[];
+  selectedOptionId: string | null;
+}
+
+export interface ScoreConfig extends VisibilityConfig {
+  value: number;
+}
+
+export interface MapConfig extends VisibilityConfig {
+  playerPosX: number;
+  playerPosY: number;
+}
+
+export interface TimingConfig extends VisibilityConfig {
+  startedAt: string | null;
+  durationMs: number | null;
+  remainingMs: number | null;
+}
+
+export interface TextDisplayConfig extends VisibilityConfig {
+  text: string;
+}
+
+export interface VisualConfig extends VisibilityConfig {
+  iconColor: string;
+}
+
+export interface ReceiverConfig {
+  tracks: TrackState[];
+  groups: GroupState[];
+  pulse: PulseConfig;
+  vote: VoteConfig | null;
+  score: ScoreConfig;
+  map: MapConfig;
+  timing: TimingConfig;
+  textDisplay: TextDisplayConfig;
+  visuals: VisualConfig;
+}
+
+export type ModuleName =
+  | "pulse"
+  | "score"
+  | "map"
+  | "timing"
+  | "textDisplay"
+  | "visuals";
+
+// ─── Unified Commands ────────────────────────────────────────────────
+export interface SetTrackStatePayload {
+  trackId: string;
+  patch: Partial<TrackState>;
+}
+
+export interface RemoveTrackPayload {
+  trackId: string;
+}
+
+export interface SetGroupStatePayload {
+  groupId: string;
+  patch: Partial<GroupState>;
+}
+
+export interface SetModuleStatePayload {
+  module: ModuleName;
+  patch: JsonRecord;
+}
+
+export interface SetVoteStatePayload {
+  vote: VoteConfig | null;
+}
+
+export interface ResetAllStatePayload extends JsonRecord {}
+
+export type UnifiedCommand =
+  | {
+      command: "set_track_state";
+      targetId: string;
+      payload: SetTrackStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "remove_track";
+      targetId: string;
+      payload: RemoveTrackPayload;
+      timestamp: string;
+    }
+  | {
+      command: "set_group_state";
+      targetId: string;
+      payload: SetGroupStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "set_module_state";
+      targetId: string;
+      payload: SetModuleStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "set_vote_state";
+      targetId: string;
+      payload: SetVoteStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "reset_all_state";
+      targetId: string;
+      payload: ResetAllStatePayload;
+      timestamp: string;
+    };
+
+export type ControlInputMessage = UnifiedCommand | LegacyControlMessage;
+
+// ─── Server State ────────────────────────────────────────────────────
 export interface ReceiverRegistration {
   receiverId: string;
   label?: string;
 }
 
-/** Receiver state tracked by the server */
 export interface ReceiverState {
   receiverId: string;
   label: string;
   connected: boolean;
-  /** Current state of audio tracks */
-  audio: {
-    track1: { playing: boolean; playable: boolean };
-    track2: { playing: boolean; playable: boolean };
-  };
-  /** Current icon color */
-  iconColor: string;
-  /** Last text message received */
-  lastMessage: string;
+  configVersion: number;
+  configIssuedAt: string;
+  configExpiresAt: string;
+  config: ReceiverConfig;
 }
 
-/** Event: full list of receivers sent to controller */
 export interface ReceiverListUpdate {
   receivers: ReceiverState[];
 }
 
+export interface ConfigSnapshotResponse {
+  ok: true;
+  configTtlMs: number;
+  receivers: ReceiverState[];
+}
+
+// ─── Unity Interaction Events ────────────────────────────────────────
+export interface UnityInteractionEvent {
+  sourceRole: "controller" | "receiver";
+  receiverId: string | null;
+  action: string;
+  element: string;
+  value?: unknown;
+  startValue?: unknown;
+  endValue?: unknown;
+  interactionDuration?: number;
+  timestamp: string;
+}
+
 // ─── Socket.IO Event Names ───────────────────────────────────────────
 export const WS_EVENTS = {
-  // Client → Server
   REGISTER_RECEIVER: "register_receiver",
   REGISTER_CONTROLLER: "register_controller",
+  REGISTER_UNITY: "register_unity",
+  REQUEST_RECEIVER_STATE: "request_receiver_state",
   CONTROL_MESSAGE: "control_message",
   CLEAR_OFFLINE_RECEIVERS: "clear_offline_receivers",
+  INTERACTION_EVENT: "interaction_event",
 
-  // Server → Client
   RECEIVER_LIST: "receiver_list",
   RECEIVER_COMMAND: "receiver_command",
   RECEIVER_STATE_UPDATE: "receiver_state_update",
 
-  // Built-in
   CONNECT: "connect",
   DISCONNECT: "disconnect",
   CONNECTION: "connection",
 } as const;
 
-// ─── Audio URLs ──────────────────────────────────────────────────────
-export const AUDIO_URLS = {
-  track1: "/audio/boing.mp3",
-  track2: "/audio/womp-womp.mp3",
-} as const;
+// ─── Defaults ────────────────────────────────────────────────────────
+export const CONFIG_TTL_MS = 60_000;
+export const DEFAULT_ICON_COLOR = "#6366f1";
+
+export interface TrackDefinition {
+  trackId: string;
+  label: string;
+  url: string;
+}
+
+export const DEFAULT_TRACK_LIBRARY: TrackDefinition[] = [
+  {
+    trackId: "track_01",
+    label: "Boing",
+    url: "/audio/boing.mp3",
+  },
+  {
+    trackId: "track_02",
+    label: "Womp Womp",
+    url: "/audio/womp-womp.mp3",
+  },
+];
+
+export const AUDIO_URLS = DEFAULT_TRACK_LIBRARY.reduce<Record<string, string>>(
+  (acc, track) => {
+    acc[track.trackId] = track.url;
+    return acc;
+  },
+  {}
+);
+
+export function createDefaultTracks(): TrackState[] {
+  return DEFAULT_TRACK_LIBRARY.map((track) => ({
+    ...track,
+    visible: true,
+    enabled: true,
+    playing: false,
+    playable: true,
+    loopEnabled: false,
+    loopControlVisible: true,
+    loopControlLocked: false,
+    volumeValue: 1,
+    volumeControlVisible: false,
+    volumeControlEnabled: true,
+    tempoFlashEnabled: false,
+    fillTime: 1,
+    groupId: null,
+  }));
+}
+
+export function createDefaultReceiverConfig(): ReceiverConfig {
+  return {
+    tracks: createDefaultTracks(),
+    groups: [],
+    pulse: {
+      visible: false,
+      enabled: false,
+      active: false,
+      bpm: 90,
+    },
+    vote: null,
+    score: {
+      visible: false,
+      enabled: false,
+      value: 0,
+    },
+    map: {
+      visible: false,
+      enabled: false,
+      playerPosX: 0.5,
+      playerPosY: 0.5,
+    },
+    timing: {
+      visible: false,
+      enabled: false,
+      startedAt: null,
+      durationMs: null,
+      remainingMs: null,
+    },
+    textDisplay: {
+      visible: false,
+      enabled: true,
+      text: "",
+    },
+    visuals: {
+      visible: true,
+      enabled: true,
+      iconColor: DEFAULT_ICON_COLOR,
+    },
+  };
+}
+
+// ─── Compatibility Helpers ───────────────────────────────────────────
+export function isLegacyMessageType(value: unknown): value is MessageType {
+  return (
+    value === "audio_control" ||
+    value === "audio_playable" ||
+    value === "color_change" ||
+    value === "text_message"
+  );
+}
+
+export function legacyTrackIdToTrackKey(trackId: 1 | 2): string {
+  return trackId === 1 ? "track_01" : "track_02";
+}
+
+export function trackKeyToLegacyTrackId(trackId: string): 1 | 2 | null {
+  if (trackId === "track_01") {
+    return 1;
+  }
+  if (trackId === "track_02") {
+    return 2;
+  }
+  return null;
+}
+
+export function legacyControlMessageToUnifiedCommand(
+  message: LegacyControlMessage
+): UnifiedCommand {
+  switch (message.type) {
+    case "audio_control": {
+      const payload = message.payload as AudioControlPayload;
+      return {
+        command: "set_track_state",
+        targetId: message.targetId,
+        payload: {
+          trackId: legacyTrackIdToTrackKey(payload.trackId),
+          patch: {
+            playing: payload.action === "play",
+          },
+        },
+        timestamp: message.timestamp,
+      };
+    }
+    case "audio_playable": {
+      const payload = message.payload as AudioPlayablePayload;
+      return {
+        command: "set_track_state",
+        targetId: message.targetId,
+        payload: {
+          trackId: legacyTrackIdToTrackKey(payload.trackId),
+          patch: {
+            playable: payload.playable,
+            ...(payload.playable ? {} : { playing: false }),
+          },
+        },
+        timestamp: message.timestamp,
+      };
+    }
+    case "color_change": {
+      const payload = message.payload as ColorChangePayload;
+      return {
+        command: "set_module_state",
+        targetId: message.targetId,
+        payload: {
+          module: "visuals",
+          patch: { iconColor: payload.color },
+        },
+        timestamp: message.timestamp,
+      };
+    }
+    case "text_message": {
+      const payload = message.payload as TextMessagePayload;
+      return {
+        command: "set_module_state",
+        targetId: message.targetId,
+        payload: {
+          module: "textDisplay",
+          patch: {
+            text: payload.text,
+            visible: true,
+          },
+        },
+        timestamp: message.timestamp,
+      };
+    }
+  }
+}

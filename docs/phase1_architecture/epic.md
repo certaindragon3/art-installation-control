@@ -89,6 +89,38 @@ Unity
 
 > **交付文档须注明：** Unity 端需安装 `socket.io-client-csharp` NuGet 包，文档需提供接入示例。
 
+#### Unity 接入示例
+
+1. Unity 通过 HTTP 调用 `POST /api/unity/register`
+2. 读取响应中的 `socketServerUrl`、`socketPath` 和事件名
+3. 使用 `socket.io-client-csharp` NuGet 包建立 Socket.IO 连接
+4. 连接成功后 emit `register_unity`
+5. 监听 `interaction_event` 获取网页交互事件，emit `control_message` 回传控制命令
+
+```csharp
+using SocketIOClient;
+
+var registerInfo = await httpClient.PostAsync("/api/unity/register", null);
+var socket = new SocketIO(socketServerUrl, new SocketIOOptions
+{
+    Path = socketPath,
+    Transport = SocketIOClient.Transport.TransportProtocol.WebSocket
+});
+
+socket.OnConnected += async (_, _) =>
+{
+    await socket.EmitAsync("register_unity");
+};
+
+socket.On("interaction_event", response =>
+{
+    var interactionJson = response.GetValue().ToString();
+    UnityEngine.Debug.Log($"Web interaction: {interactionJson}");
+});
+
+await socket.ConnectAsync();
+```
+
 ### 1.5 Global Reset
 
 实现 `{ command: "reset_all_state" }`，重置所有模块状态到默认值。
@@ -101,14 +133,21 @@ Unity
 
 ## 验收标准
 
-- [ ] 统一 `{ command, targetId, payload }` 消息格式，旧格式自动迁移
-- [ ] Receiver 状态为 state-driven，服务端下发完整 config JSON
-- [ ] Config JSON 支持 1 分钟 TTL 过期
-- [ ] Track 列表动态化，支持增删改
-- [ ] Unity 可通过 Socket.IO 连接并实时接收 interaction events
-- [ ] 前端每个交互元素都通过 `postToUnity` 发送事件
-- [ ] Continuous values 仅发 startInteraction / endInteraction
-- [ ] `reset_all_state` 命令正常工作
-- [ ] 现有功能（audio play/pause, color, text）在新架构下回归通过
-- [ ] 类型检查 (`pnpm check`) 通过
-- [ ] 现有测试通过
+- [x] 统一 `{ command, targetId, payload }` 消息格式，旧格式自动迁移
+- [x] Receiver 状态为 state-driven，服务端下发完整 config JSON
+- [x] Config JSON 支持 1 分钟 TTL 过期
+- [x] Track 列表动态化，支持增删改
+- [x] Unity 可通过 Socket.IO 连接并实时接收 interaction events
+- [x] 前端每个交互元素都通过 `postToUnity` 发送事件
+- [x] Continuous values 仅发 startInteraction / endInteraction
+- [x] `reset_all_state` 命令正常工作
+- [x] 现有功能（audio play/pause, color, text）在新架构下回归通过
+- [x] 类型检查 (`pnpm check`) 通过
+- [x] 现有测试通过
+
+## 测试建议（无 Unity 客户端）
+
+- 本地打开一个 `/controller` 和至少两个 `/receiver/:id` 页面，确认注册、掉线重连、广播和单播都正常。
+- 用浏览器 DevTools 或自写临时页面连接 `register_unity`，仅监听 `interaction_event`，验证 `postToUnity` 是否发出离散事件和 `startInteraction` / `endInteraction`。
+- 用 HTTP 接口 `POST /api/controller/command`、`GET /api/config`、`POST /api/unity/register` 做回归测试，不依赖 Unity 也能覆盖协议层。
+- 部署到 Zeabur 后至少再测一次 TTL 过期重拉、移动网络下的 Socket 重连，以及单副本部署是否保持正常。

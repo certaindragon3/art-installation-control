@@ -129,3 +129,12 @@ Receiver (浏览器)
 - 端口由平台注入 `PORT` 环境变量，默认 3000
 - 健康检查：`GET /api/healthz`
 - 副本数必须保持为 1
+
+## 前端组件约定
+
+- 前端新增或重构 UI 时，优先复用 `client/src/components/ui/` 里的 `shadcn/ui` 组件，不要手写重复的基础组件。
+- 当前项目已配置 `@shadcn` registry，风格以 `components.json` 为准（`new-york`、`neutral`、CSS variables）。
+- 当前项目额外启用了 `@diceui`、`@kibo-ui`、`@cult-ui`、`@magicui`、`@motion-primitives`、`@react-bits` 作为补充 registry。
+- 组件选择上优先顺序为：基础表单/可访问性看 `@shadcn`、`@diceui`、`@kibo-ui`；更强的动效和视觉表达看 `@cult-ui`、`@magicui`、`@motion-primitives`、`@react-bits`。
+- 需要新增 `shadcn` 组件、示例或命令时，优先使用 `shadcn` MCP 工具能力，例如查询 registry、查看示例、生成 add command，而不是凭记忆手写。
+- 如果需求超出 `shadcn` 现成组件范围，应先用 `shadcn` 组件搭骨架，再只对必要部分做定制化样式或行为扩展。

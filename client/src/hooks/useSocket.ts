@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { WS_EVENTS } from "@shared/wsTypes";
-import type {
-  ControlMessage,
-  ReceiverState,
-  ReceiverListUpdate,
+import {
+  type ReceiverListUpdate,
+  type ReceiverState,
+  type UnifiedCommand,
+  type UnityInteractionEvent,
+  WS_EVENTS,
 } from "@shared/wsTypes";
 
 interface UseSocketOptions {
-  role: "controller" | "receiver";
+  role: "controller" | "receiver" | "unity";
   receiverId?: string;
   receiverLabel?: string;
 }
@@ -17,8 +18,10 @@ interface UseSocketReturn {
   connected: boolean;
   receivers: ReceiverState[];
   receiverState: ReceiverState | null;
-  sendCommand: (msg: ControlMessage) => void;
+  sendCommand: (command: UnifiedCommand) => void;
+  postInteraction: (event: UnityInteractionEvent) => void;
   clearOfflineReceivers: () => void;
+  requestReceiverState: () => void;
 }
 
 export function useSocket(options: UseSocketOptions): UseSocketReturn {
@@ -29,7 +32,6 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
   const [receiverState, setReceiverState] = useState<ReceiverState | null>(null);
 
   useEffect(() => {
-    // Connect to the same origin (works in both dev and production)
     const socket = io({
       transports: ["websocket", "polling"],
       reconnection: true,
@@ -42,11 +44,18 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
 
     socket.on(WS_EVENTS.CONNECT, () => {
       setConnected(true);
-      console.log(`[Socket] Connected as ${role}`);
 
       if (role === "controller") {
         socket.emit(WS_EVENTS.REGISTER_CONTROLLER);
-      } else if (role === "receiver" && receiverId) {
+        return;
+      }
+
+      if (role === "unity") {
+        socket.emit(WS_EVENTS.REGISTER_UNITY);
+        return;
+      }
+
+      if (receiverId) {
         socket.emit(WS_EVENTS.REGISTER_RECEIVER, {
           receiverId,
           label: receiverLabel || `Receiver ${receiverId}`,
@@ -56,25 +65,15 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
 
     socket.on(WS_EVENTS.DISCONNECT, () => {
       setConnected(false);
-      console.log("[Socket] Disconnected");
     });
 
-    // Controller: receive updated receiver list
     if (role === "controller") {
       socket.on(WS_EVENTS.RECEIVER_LIST, (data: ReceiverListUpdate) => {
         setReceivers(data.receivers);
       });
     }
 
-    // Receiver: receive commands and state updates
     if (role === "receiver") {
-      socket.on(WS_EVENTS.RECEIVER_COMMAND, (msg: ControlMessage) => {
-        // This will be handled by the Receiver page component
-        window.dispatchEvent(
-          new CustomEvent("receiver_command", { detail: msg })
-        );
-      });
-
       socket.on(WS_EVENTS.RECEIVER_STATE_UPDATE, (state: ReceiverState) => {
         setReceiverState(state);
       });
@@ -84,18 +83,38 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [role, receiverId, receiverLabel]);
+  }, [receiverId, receiverLabel, role]);
 
-  const sendCommand = useCallback((msg: ControlMessage) => {
-    if (socketRef.current?.connected) {
-      socketRef.current.emit(WS_EVENTS.CONTROL_MESSAGE, msg);
+  const sendCommand = useCallback((command: UnifiedCommand) => {
+    if (!socketRef.current?.connected) {
+      return;
     }
+
+    socketRef.current.emit(WS_EVENTS.CONTROL_MESSAGE, command);
+  }, []);
+
+  const postInteraction = useCallback((event: UnityInteractionEvent) => {
+    if (!socketRef.current?.connected) {
+      return;
+    }
+
+    socketRef.current.emit(WS_EVENTS.INTERACTION_EVENT, event);
   }, []);
 
   const clearOfflineReceivers = useCallback(() => {
-    if (socketRef.current?.connected && role === "controller") {
-      socketRef.current.emit(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS);
+    if (!socketRef.current?.connected || role !== "controller") {
+      return;
     }
+
+    socketRef.current.emit(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS);
+  }, [role]);
+
+  const requestReceiverState = useCallback(() => {
+    if (!socketRef.current?.connected || role !== "receiver") {
+      return;
+    }
+
+    socketRef.current.emit(WS_EVENTS.REQUEST_RECEIVER_STATE);
   }, [role]);
 
   return {
@@ -103,6 +122,8 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     receivers,
     receiverState,
     sendCommand,
+    postInteraction,
     clearOfflineReceivers,
+    requestReceiverState,
   };
 }

@@ -47,3 +47,10 @@ interface RecordConfig {
 - [ ] Filter pad 为 continuous value，使用 startInteraction / endInteraction
 - [ ] Recording start/stop 正常
 - [ ] 录制数据可导出为 JSON
+
+## 测试建议（无 Unity 客户端）
+
+- Filter 先本地验证 2D pad 映射、filter type 切换，以及连续交互只发 `startInteraction` / `endInteraction`。
+- Recording 重点测开始、停止、重复开始停止、空记录导出和长时记录导出。
+- 用浏览器假 Unity 监听事件流，确认 filter 和 recording 事件格式稳定。
+- Optional 功能不必每做完一个就上线，可以等确定要交付时再统一部署到 Zeabur 验证。

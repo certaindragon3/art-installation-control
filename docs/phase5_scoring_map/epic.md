@@ -48,3 +48,10 @@ interface MapConfig {
 - [ ] 教室地图 2D 展示
 - [ ] Normalized 坐标 (0-1) 定位准确
 - [ ] Unity 可远程控制 score 和 map position
+
+## 测试建议（无 Unity 客户端）
+
+- 本地联调 controller 和 receiver，验证 score 的 show/hide/enable/disable/reset，以及地图位置更新是否实时可见。
+- 对 map 坐标做边界测试，至少覆盖 `0`、`1`、中间值和越界输入被如何处理。
+- 用 HTTP 或 socket 命令直接推送 score/map 状态，确认不依赖 Unity 也能完整回归。
+- 这一 phase 可先本地验证为主，如果后面马上做 Phase 6，可以合并到下一次 Zeabur 联测。

@@ -1,10 +1,15 @@
-import type { AddressInfo } from "net";
 import type { Server as HttpServer } from "http";
+import type { AddressInfo } from "net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { io as createClient, type Socket } from "socket.io-client";
 import { createApp } from "./_core/app";
 import { resetWebSocketState } from "./wsServer";
-import { WS_EVENTS } from "../shared/wsTypes";
+import {
+  AUDIO_URLS,
+  CONFIG_TTL_MS,
+  DEFAULT_ICON_COLOR,
+  WS_EVENTS,
+} from "../shared/wsTypes";
 
 async function listen(server: HttpServer) {
   await new Promise<void>((resolve, reject) => {
@@ -101,11 +106,19 @@ describe("controller HTTP API", () => {
     }
   });
 
-  it("lists registered receivers over HTTP", async () => {
+  it("lists registered receivers with config snapshots over HTTP", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);
 
-    const statePromise = waitForEvent(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const statePromise = waitForEvent<{
+      receiverId: string;
+      label: string;
+      connected: boolean;
+      configVersion: number;
+      configExpiresAt: string;
+      config: { tracks: Array<{ trackId: string }> };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
     receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
       receiverId: "screen-a",
       label: "Main Screen",
@@ -116,7 +129,12 @@ describe("controller HTTP API", () => {
       receiverId: "screen-a",
       label: "Main Screen",
       connected: true,
+      configVersion: 1,
+      config: {
+        tracks: [{ trackId: "track_01" }, { trackId: "track_02" }],
+      },
     });
+    expect(new Date(state.configExpiresAt).getTime()).toBeGreaterThan(Date.now());
 
     const response = await fetch(`${baseUrl}/api/controller/receivers`);
     const body = await response.json();
@@ -129,24 +147,37 @@ describe("controller HTTP API", () => {
           receiverId: "screen-a",
           label: "Main Screen",
           connected: true,
-          iconColor: "#6366f1",
+          configVersion: 1,
+          config: {
+            visuals: {
+              iconColor: "#6366f1",
+            },
+          },
         },
       ],
     });
   });
 
-  it("sends HTTP commands through the existing receiver command flow", async () => {
+  it("accepts legacy HTTP messages and emits unified commands plus updated state", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);
 
-    const statePromise = waitForEvent(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const initialStatePromise = waitForEvent(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
     receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
       receiverId: "screen-a",
       label: "Main Screen",
     });
-    await statePromise;
+    await initialStatePromise;
 
-    const commandPromise = waitForEvent(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const commandPromise = waitForEvent<{
+      command: string;
+      payload: { module: string; patch: { text: string } };
+    }>(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const updatedStatePromise = waitForEvent<{
+      configVersion: number;
+      config: { textDisplay: { text: string; visible: boolean } };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
     const response = await fetch(`${baseUrl}/api/controller/command`, {
       method: "POST",
       headers: {
@@ -159,28 +190,338 @@ describe("controller HTTP API", () => {
       }),
     });
     const body = await response.json();
-    const command = await commandPromise;
 
     expect(response.status).toBe(200);
-    expect(command).toMatchObject({
-      type: "text_message",
-      targetId: "screen-a",
-      payload: { text: "Hello from HTTP" },
+    expect(await commandPromise).toMatchObject({
+      command: "set_module_state",
+      payload: {
+        module: "textDisplay",
+        patch: {
+          text: "Hello from HTTP",
+        },
+      },
+    });
+    expect(await updatedStatePromise).toMatchObject({
+      configVersion: 2,
+      config: {
+        textDisplay: {
+          text: "Hello from HTTP",
+          visible: true,
+        },
+      },
     });
     expect(body).toMatchObject({
       ok: true,
-      broadcast: false,
+      command: {
+        command: "set_module_state",
+        targetId: "screen-a",
+      },
       deliveredReceiverIds: ["screen-a"],
       receivers: [
         {
           receiverId: "screen-a",
-          lastMessage: "Hello from HTTP",
+          config: {
+            textDisplay: {
+              text: "Hello from HTTP",
+            },
+          },
         },
       ],
     });
   });
 
-  it("clears offline receivers over HTTP", async () => {
+  it("supports dynamic track add-remove and reset while keeping legacy controls working", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Main Screen",
+    });
+    await initialStatePromise;
+
+    const addCommandPromise = waitForEvent<{
+      command: string;
+      payload: { trackId: string; patch: { label: string; url: string } };
+    }>(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const addStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        tracks: Array<{ trackId: string; label: string; url: string; volumeValue: number }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const addResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_track_state",
+        targetId: "screen-a",
+        payload: {
+          trackId: "ambient_loop",
+          patch: {
+            label: "Ambient Loop",
+            url: "/audio/ambient-loop.mp3",
+            volumeValue: 0.42,
+          },
+        },
+      }),
+    });
+
+    expect(addResponse.status).toBe(200);
+    expect(await addCommandPromise).toMatchObject({
+      command: "set_track_state",
+      payload: {
+        trackId: "ambient_loop",
+        patch: {
+          label: "Ambient Loop",
+          url: "/audio/ambient-loop.mp3",
+        },
+      },
+    });
+    expect(await addStatePromise).toMatchObject({
+      configVersion: 2,
+      config: {
+        tracks: expect.arrayContaining([
+          expect.objectContaining({
+            trackId: "ambient_loop",
+            label: "Ambient Loop",
+            url: "/audio/ambient-loop.mp3",
+            volumeValue: 0.42,
+          }),
+        ]),
+      },
+    });
+
+    const removeCommandPromise = waitForEvent<{
+      command: string;
+      payload: { trackId: string };
+    }>(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const removeStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        tracks: Array<{ trackId: string }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const removeResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "remove_track",
+        targetId: "screen-a",
+        payload: {
+          trackId: "ambient_loop",
+        },
+      }),
+    });
+
+    expect(removeResponse.status).toBe(200);
+    expect(await removeCommandPromise).toMatchObject({
+      command: "remove_track",
+      payload: {
+        trackId: "ambient_loop",
+      },
+    });
+    expect(await removeStatePromise).toMatchObject({
+      configVersion: 3,
+      config: {
+        tracks: [
+          { trackId: "track_01" },
+          { trackId: "track_02" },
+        ],
+      },
+    });
+
+    const audioStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        tracks: Array<{ trackId: string; playing: boolean; url: string }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const audioResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "audio_control",
+        targetId: "screen-a",
+        payload: { trackId: 1, action: "play" },
+      }),
+    });
+
+    expect(audioResponse.status).toBe(200);
+    expect(await audioStatePromise).toMatchObject({
+      configVersion: 4,
+      config: {
+        tracks: expect.arrayContaining([
+          expect.objectContaining({
+            trackId: "track_01",
+            playing: true,
+            url: AUDIO_URLS.track_01,
+          }),
+        ]),
+      },
+    });
+
+    const colorStatePromise = waitForEvent<{
+      configVersion: number;
+      config: { visuals: { iconColor: string } };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const colorResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "color_change",
+        targetId: "screen-a",
+        payload: { color: "#ffffff" },
+      }),
+    });
+
+    expect(colorResponse.status).toBe(200);
+    expect(await colorStatePromise).toMatchObject({
+      configVersion: 5,
+      config: {
+        visuals: {
+          iconColor: "#ffffff",
+        },
+      },
+    });
+
+    const resetCommandPromise = waitForEvent<{
+      command: string;
+    }>(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const resetStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        visuals: { iconColor: string };
+        tracks: Array<{ trackId: string; playing: boolean }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const resetResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "reset_all_state",
+        targetId: "screen-a",
+        payload: {},
+      }),
+    });
+
+    expect(resetResponse.status).toBe(200);
+    expect(await resetCommandPromise).toMatchObject({
+      command: "reset_all_state",
+    });
+    expect(await resetStatePromise).toMatchObject({
+      configVersion: 6,
+      config: {
+        visuals: {
+          iconColor: DEFAULT_ICON_COLOR,
+        },
+        tracks: [
+          {
+            trackId: "track_01",
+            playing: false,
+          },
+          {
+            trackId: "track_02",
+            playing: false,
+          },
+        ],
+      },
+    });
+  });
+
+  it("serves global config snapshots and Unity registration metadata", async () => {
+    const configResponse = await fetch(`${baseUrl}/api/config`);
+    const configBody = await configResponse.json();
+
+    expect(configResponse.status).toBe(200);
+    expect(configBody).toEqual({
+      ok: true,
+      configTtlMs: CONFIG_TTL_MS,
+      receivers: [],
+    });
+
+    const unityResponse = await fetch(`${baseUrl}/api/unity/register`, {
+      method: "POST",
+    });
+    const unityBody = await unityResponse.json();
+
+    expect(unityResponse.status).toBe(200);
+    expect(unityBody).toMatchObject({
+      ok: true,
+      role: "unity",
+      socketServerUrl: baseUrl,
+      socketPath: "/socket.io",
+      transports: ["websocket", "polling"],
+      events: {
+        register: WS_EVENTS.REGISTER_UNITY,
+        command: WS_EVENTS.CONTROL_MESSAGE,
+        interaction: WS_EVENTS.INTERACTION_EVENT,
+      },
+      config: {
+        ok: true,
+        configTtlMs: CONFIG_TTL_MS,
+        receivers: [],
+      },
+    });
+  });
+
+  it("forwards receiver interaction events to Unity sockets", async () => {
+    const receiver = await connectSocket(baseUrl);
+    const unity = await connectSocket(baseUrl);
+    sockets.push(receiver, unity);
+
+    unity.emit(WS_EVENTS.REGISTER_UNITY);
+
+    const receiverStatePromise = waitForEvent(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Main Screen",
+    });
+    await receiverStatePromise;
+
+    const unityEventPromise = waitForEvent<{
+      sourceRole: string;
+      receiverId: string | null;
+      action: string;
+      element: string;
+      value: string;
+    }>(unity, WS_EVENTS.INTERACTION_EVENT);
+
+    receiver.emit(WS_EVENTS.INTERACTION_EVENT, {
+      sourceRole: "receiver",
+      receiverId: null,
+      action: "click",
+      element: "receiver:vote_button",
+      value: "option_a",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(await unityEventPromise).toMatchObject({
+      sourceRole: "receiver",
+      receiverId: "screen-a",
+      action: "click",
+      element: "receiver:vote_button",
+      value: "option_a",
+    });
+  });
+
+  it("clears offline receivers and returns useful HTTP errors", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);
 
@@ -199,20 +540,16 @@ describe("controller HTTP API", () => {
       return body.receivers[0]?.connected === false;
     });
 
-    const response = await fetch(`${baseUrl}/api/controller/clear-offline`, {
+    const clearResponse = await fetch(`${baseUrl}/api/controller/clear-offline`, {
       method: "POST",
     });
-    const body = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(body).toEqual({
+    expect(clearResponse.status).toBe(200);
+    expect(await clearResponse.json()).toEqual({
       ok: true,
       removedReceiverIds: ["screen-a"],
       receivers: [],
     });
-  });
 
-  it("returns useful HTTP errors for invalid or missing targets", async () => {
     const invalidResponse = await fetch(`${baseUrl}/api/controller/command`, {
       method: "POST",
       headers: {
@@ -237,9 +574,12 @@ describe("controller HTTP API", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        type: "color_change",
+        command: "set_module_state",
         targetId: "missing-screen",
-        payload: { color: "#ffffff" },
+        payload: {
+          module: "visuals",
+          patch: { iconColor: "#ffffff" },
+        },
       }),
     });
 

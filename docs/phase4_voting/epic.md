@@ -62,3 +62,10 @@ interface VoteSubmission {
 - [ ] 未投票用户被标记
 - [ ] vote_reset_all 正常工作
 - [ ] JSON 导出 fallback 可用
+
+## 测试建议（无 Unity 客户端）
+
+- 本地至少开三个 receiver 页面模拟多人投票，验证冻结其他交互、单人单票、允许 revote、超时自动关闭。
+- 用一个浏览器标签页模拟 Unity socket client，只监听投票相关 `interaction_event` 或汇总事件，确认服务端聚合数据格式正确。
+- 为“未投票用户标记”“重置全部投票”“JSON 导出”补测试，避免只验证 happy path。
+- 投票是明显的并发场景，完成后建议部署到 Zeabur 进行真机多端联测。

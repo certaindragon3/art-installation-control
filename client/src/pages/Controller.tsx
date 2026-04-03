@@ -1,9 +1,11 @@
-import { useState, useCallback, useEffect } from "react";
-import { useSocket } from "@/hooks/useSocket";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
 import {
   Select,
   SelectContent,
@@ -12,222 +14,456 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useSocket } from "@/hooks/useSocket";
+import { usePostToUnity } from "@/hooks/usePostToUnity";
 import {
-  Play,
-  Pause,
+  Monitor,
   Music,
   Palette,
-  MessageSquare,
-  Radio,
-  Wifi,
-  WifiOff,
+  Plus,
+  RotateCcw,
   Send,
+  Trash2,
   Volume2,
   VolumeX,
-  Monitor,
+  Wifi,
+  WifiOff,
   Zap,
-  Trash2,
 } from "lucide-react";
-import type { ControlMessage, ReceiverState } from "@shared/wsTypes";
+import type { ReceiverState, TrackState, UnifiedCommand } from "@shared/wsTypes";
 
 const PRESET_COLORS = [
-  "#ef4444", "#f97316", "#eab308", "#22c55e",
-  "#06b6d4", "#3b82f6", "#6366f1", "#a855f7",
-  "#ec4899", "#f43f5e", "#ffffff", "#000000",
+  "#ef4444",
+  "#f97316",
+  "#eab308",
+  "#22c55e",
+  "#06b6d4",
+  "#3b82f6",
+  "#6366f1",
+  "#ec4899",
+  "#ffffff",
+  "#111827",
 ];
 
+function createTrackId(label: string) {
+  const normalized = label
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return `${normalized || "track"}_${Date.now().toString(36)}`;
+}
+
 export default function Controller() {
-  const { connected, receivers, sendCommand, clearOfflineReceivers } = useSocket({
-    role: "controller",
+  const { connected, receivers, sendCommand, clearOfflineReceivers, postInteraction } =
+    useSocket({
+      role: "controller",
+    });
+  const {
+    postDiscreteInteraction,
+    beginContinuousInteraction,
+    endContinuousInteraction,
+  } = usePostToUnity({
+    sourceRole: "controller",
+    postInteraction,
   });
-  const [selectedReceiver, setSelectedReceiver] = useState<string>("");
+
+  const [selectedReceiverId, setSelectedReceiverId] = useState("");
   const [textInput, setTextInput] = useState("");
   const [customColor, setCustomColor] = useState("#6366f1");
-  const offlineReceivers = receivers.filter((r) => !r.connected);
+  const [newTrackLabel, setNewTrackLabel] = useState("");
+  const [newTrackUrl, setNewTrackUrl] = useState("");
 
-  const selectedState = receivers.find(
-    (r) => r.receiverId === selectedReceiver
-  );
+  useEffect(() => {
+    if (selectedReceiverId) {
+      return;
+    }
+
+    const firstConnectedReceiver = receivers.find((receiver) => receiver.connected);
+    if (firstConnectedReceiver) {
+      setSelectedReceiverId(firstConnectedReceiver.receiverId);
+    }
+  }, [receivers, selectedReceiverId]);
 
   useEffect(() => {
     if (
-      selectedReceiver &&
-      !receivers.some((receiver) => receiver.receiverId === selectedReceiver)
+      selectedReceiverId &&
+      !receivers.some((receiver) => receiver.receiverId === selectedReceiverId)
     ) {
-      setSelectedReceiver("");
+      setSelectedReceiverId("");
     }
-  }, [receivers, selectedReceiver]);
+  }, [receivers, selectedReceiverId]);
 
-  const send = useCallback(
-    (msg: Omit<ControlMessage, "timestamp">) => {
+  const selectedReceiver = useMemo(
+    () => receivers.find((receiver) => receiver.receiverId === selectedReceiverId),
+    [receivers, selectedReceiverId]
+  );
+
+  useEffect(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    setCustomColor(selectedReceiver.config.visuals.iconColor);
+  }, [selectedReceiver]);
+
+  const offlineReceivers = receivers.filter((receiver) => !receiver.connected);
+
+  const dispatchCommand = useCallback(
+    (command: Omit<UnifiedCommand, "timestamp">) => {
       sendCommand({
-        ...msg,
+        ...command,
         timestamp: new Date().toISOString(),
-      } as ControlMessage);
+      } as UnifiedCommand);
     },
     [sendCommand]
   );
 
-  const handleAudioControl = (trackId: 1 | 2, action: "play" | "pause") => {
-    if (!selectedReceiver) return;
-    send({
-      type: "audio_control",
-      targetId: selectedReceiver,
-      payload: { trackId, action },
-    });
-  };
+  const handleTrackPlayState = useCallback(
+    (track: TrackState, playing: boolean) => {
+      if (!selectedReceiver) {
+        return;
+      }
 
-  const handleAudioPlayable = (trackId: 1 | 2, playable: boolean) => {
-    if (!selectedReceiver) return;
-    send({
-      type: "audio_playable",
-      targetId: selectedReceiver,
-      payload: { trackId, playable },
-    });
-  };
+      dispatchCommand({
+        command: "set_track_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          trackId: track.trackId,
+          patch: { playing },
+        },
+      });
 
-  const handleColorChange = (color: string) => {
-    if (!selectedReceiver) return;
-    setCustomColor(color);
-    send({
-      type: "color_change",
-      targetId: selectedReceiver,
-      payload: { color },
-    });
-  };
+      postDiscreteInteraction({
+        action: playing ? "play" : "pause",
+        element: `track:${track.trackId}:transport`,
+        value: playing,
+        receiverId: selectedReceiver.receiverId,
+      });
+    },
+    [dispatchCommand, postDiscreteInteraction, selectedReceiver]
+  );
 
-  const handleTextMessage = () => {
-    if (!selectedReceiver || !textInput.trim()) return;
-    send({
-      type: "text_message",
-      targetId: selectedReceiver,
-      payload: { text: textInput.trim() },
-    });
-    setTextInput("");
-  };
+  const handleTrackPlayable = useCallback(
+    (track: TrackState, playable: boolean) => {
+      if (!selectedReceiver) {
+        return;
+      }
 
-  const handleBroadcastText = () => {
-    if (!textInput.trim()) return;
-    send({
-      type: "text_message",
+      dispatchCommand({
+        command: "set_track_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          trackId: track.trackId,
+          patch: {
+            playable,
+            ...(playable ? {} : { playing: false }),
+          },
+        },
+      });
+
+      postDiscreteInteraction({
+        action: "togglePlayable",
+        element: `track:${track.trackId}:playable`,
+        value: playable,
+        receiverId: selectedReceiver.receiverId,
+      });
+    },
+    [dispatchCommand, postDiscreteInteraction, selectedReceiver]
+  );
+
+  const handleTrackVolumeChange = useCallback(
+    (track: TrackState, volumeValue: number) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_track_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          trackId: track.trackId,
+          patch: {
+            volumeValue,
+            volumeControlVisible: true,
+          },
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const handleTrackRemove = useCallback(
+    (track: TrackState) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "remove_track",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          trackId: track.trackId,
+        },
+      });
+
+      postDiscreteInteraction({
+        action: "removeTrack",
+        element: `track:${track.trackId}:remove`,
+        value: track.trackId,
+        receiverId: selectedReceiver.receiverId,
+      });
+    },
+    [dispatchCommand, postDiscreteInteraction, selectedReceiver]
+  );
+
+  const handleAddTrack = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    const label = newTrackLabel.trim();
+    const url = newTrackUrl.trim();
+    if (!label || !url) {
+      return;
+    }
+
+    const trackId = createTrackId(label);
+    dispatchCommand({
+      command: "set_track_state",
+      targetId: selectedReceiver.receiverId,
+      payload: {
+        trackId,
+        patch: {
+          label,
+          url,
+          visible: true,
+          enabled: true,
+          playable: true,
+          playing: false,
+          loopEnabled: false,
+          loopControlVisible: true,
+          loopControlLocked: false,
+          volumeValue: 1,
+          volumeControlVisible: true,
+          volumeControlEnabled: true,
+          tempoFlashEnabled: false,
+          fillTime: 1,
+          groupId: null,
+        },
+      },
+    });
+
+    postDiscreteInteraction({
+      action: "addTrack",
+      element: "tracks:add",
+      value: { trackId, label, url },
+      receiverId: selectedReceiver.receiverId,
+    });
+
+    setNewTrackLabel("");
+    setNewTrackUrl("");
+  }, [
+    dispatchCommand,
+    newTrackLabel,
+    newTrackUrl,
+    postDiscreteInteraction,
+    selectedReceiver,
+  ]);
+
+  const handleColorChange = useCallback(
+    (color: string, receiverId: string) => {
+      setCustomColor(color);
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: receiverId,
+        payload: {
+          module: "visuals",
+          patch: {
+            iconColor: color,
+            visible: true,
+          },
+        },
+      });
+    },
+    [dispatchCommand]
+  );
+
+  const handleTextMessage = useCallback(
+    (targetId: string) => {
+      const nextText = textInput.trim();
+      if (!nextText) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId,
+        payload: {
+          module: "textDisplay",
+          patch: {
+            text: nextText,
+            visible: true,
+            enabled: true,
+          },
+        },
+      });
+
+      postDiscreteInteraction({
+        action: "sendText",
+        element: "textDisplay:text",
+        value: nextText,
+        receiverId: targetId === "*" ? null : targetId,
+      });
+
+      setTextInput("");
+    },
+    [dispatchCommand, postDiscreteInteraction, textInput]
+  );
+
+  const handleResetAllState = useCallback(() => {
+    dispatchCommand({
+      command: "reset_all_state",
       targetId: "*",
-      payload: { text: textInput.trim() },
+      payload: {},
     });
-    setTextInput("");
-  };
+
+    postDiscreteInteraction({
+      action: "reset",
+      element: "system:reset_all_state",
+      value: true,
+      receiverId: null,
+    });
+  }, [dispatchCommand, postDiscreteInteraction]);
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border/50 bg-card/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container flex items-center justify-between h-16">
+      <header className="sticky top-0 z-50 border-b border-border/60 bg-card/90 backdrop-blur">
+        <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-primary" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+              <Zap className="h-5 w-5 text-primary" />
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Art Installation Controller
+                Phase 1 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Real-time multi-receiver control panel
+                Unified commands + state-driven receivers
               </p>
             </div>
           </div>
-          <Badge
-            variant={connected ? "default" : "destructive"}
-            className="gap-1.5"
-          >
-            {connected ? (
-              <Wifi className="w-3 h-3" />
-            ) : (
-              <WifiOff className="w-3 h-3" />
-            )}
+          <Badge variant={connected ? "default" : "destructive"} className="gap-1.5">
+            {connected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
             {connected ? "Connected" : "Disconnected"}
           </Badge>
         </div>
       </header>
 
-      <div className="container py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left: Receiver List */}
-          <div className="lg:col-span-4">
+      <main className="container py-6">
+        <div className="grid gap-6 lg:grid-cols-12">
+          <section className="space-y-6 lg:col-span-4">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Monitor className="w-4 h-4" />
-                  Connected Receivers
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Monitor className="h-4 w-4" />
+                  Receivers
                   <Badge variant="secondary" className="ml-auto">
-                    {receivers.filter((r) => r.connected).length}/
+                    {receivers.filter((receiver) => receiver.connected).length}/
                     {receivers.length}
                   </Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">
-                    Offline receivers retained for 10 minutes after disconnect.
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={clearOfflineReceivers}
-                    disabled={offlineReceivers.length === 0}
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-1" />
-                    Clear Offline ({offlineReceivers.length})
-                  </Button>
+                <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
+                  Config snapshots expire after 60 seconds. Receivers will
+                  re-request state automatically.
                 </div>
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    clearOfflineReceivers();
+                    postDiscreteInteraction({
+                      action: "clearOfflineReceivers",
+                      element: "system:clear_offline_receivers",
+                      value: offlineReceivers.length,
+                      receiverId: null,
+                    });
+                  }}
+                  disabled={offlineReceivers.length === 0}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Clear Offline ({offlineReceivers.length})
+                </Button>
                 {receivers.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Radio className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm">No receivers connected yet</p>
-                    <p className="text-xs mt-1">
-                      Open /receiver/:id in another tab
-                    </p>
+                  <div className="rounded-lg border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
+                    Open `/receiver/:id` in another tab to register a receiver.
                   </div>
                 ) : (
-                  receivers.map((r) => (
-                    <ReceiverCard
-                      key={r.receiverId}
-                      receiver={r}
-                      selected={selectedReceiver === r.receiverId}
-                      onClick={() => setSelectedReceiver(r.receiverId)}
+                  receivers.map((receiver) => (
+                    <ReceiverSummaryCard
+                      key={receiver.receiverId}
+                      receiver={receiver}
+                      selected={receiver.receiverId === selectedReceiverId}
+                      onClick={() => {
+                        setSelectedReceiverId(receiver.receiverId);
+                        postDiscreteInteraction({
+                          action: "selectReceiver",
+                          element: "controller:receiver_selector",
+                          value: receiver.receiverId,
+                          receiverId: receiver.receiverId,
+                        });
+                      }}
                     />
                   ))
                 )}
               </CardContent>
             </Card>
-          </div>
 
-          {/* Right: Control Panel */}
-          <div className="lg:col-span-8 space-y-6">
-            {/* Target Selector */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">System Actions</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Button className="w-full justify-start" variant="destructive" onClick={handleResetAllState}>
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Reset All State
+                </Button>
+                <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+                  `reset_all_state` broadcasts default config to every receiver and
+                  clears runtime changes across modules.
+                </div>
+              </CardContent>
+            </Card>
+          </section>
+
+          <section className="space-y-6 lg:col-span-8">
             <Card>
               <CardContent className="pt-6">
-                <div className="flex items-center gap-4">
-                  <Label className="text-sm font-medium whitespace-nowrap">
-                    Target Receiver
-                  </Label>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <Label className="min-w-28 text-sm font-medium">Target Receiver</Label>
                   <Select
-                    value={selectedReceiver}
-                    onValueChange={setSelectedReceiver}
+                    value={selectedReceiverId}
+                    onValueChange={(value) => {
+                      setSelectedReceiverId(value);
+                      postDiscreteInteraction({
+                        action: "selectReceiver",
+                        element: "controller:receiver_dropdown",
+                        value,
+                        receiverId: value,
+                      });
+                    }}
                   >
                     <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Select a receiver to control" />
+                      <SelectValue placeholder="Choose a receiver" />
                     </SelectTrigger>
                     <SelectContent>
-                      {receivers.map((r) => (
-                        <SelectItem key={r.receiverId} value={r.receiverId}>
-                          <span className="flex items-center gap-2">
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                r.connected ? "bg-green-500" : "bg-red-500"
-                              }`}
-                            />
-                            {r.label} ({r.receiverId})
-                          </span>
+                      {receivers.map((receiver) => (
+                        <SelectItem key={receiver.receiverId} value={receiver.receiverId}>
+                          {receiver.label} ({receiver.receiverId})
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -236,194 +472,293 @@ export default function Controller() {
               </CardContent>
             </Card>
 
-            {selectedReceiver && selectedState ? (
+            {selectedReceiver ? (
               <>
-                {/* Audio Control */}
                 <Card>
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Music className="w-4 h-4" />
-                      Audio Control
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Music className="h-4 w-4" />
+                      Dynamic Tracks
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    {([1, 2] as const).map((trackId) => {
-                      const track =
-                        trackId === 1
-                          ? selectedState.audio.track1
-                          : selectedState.audio.track2;
-                      return (
-                        <div
-                          key={trackId}
-                          className="flex items-center gap-4 p-3 rounded-lg bg-muted/50"
+                    <div className="rounded-xl border border-dashed border-border/70 p-4">
+                      <div className="grid gap-3 md:grid-cols-[1fr_1.4fr_auto]">
+                        <Input
+                          placeholder="Track label"
+                          value={newTrackLabel}
+                          onFocus={() =>
+                            beginContinuousInteraction({
+                              element: "tracks:new_label",
+                              startValue: newTrackLabel,
+                              receiverId: selectedReceiver.receiverId,
+                            })
+                          }
+                          onBlur={() =>
+                            endContinuousInteraction({
+                              element: "tracks:new_label",
+                              endValue: newTrackLabel,
+                              receiverId: selectedReceiver.receiverId,
+                            })
+                          }
+                          onChange={(event) => setNewTrackLabel(event.target.value)}
+                        />
+                        <Input
+                          placeholder="Audio URL"
+                          value={newTrackUrl}
+                          onFocus={() =>
+                            beginContinuousInteraction({
+                              element: "tracks:new_url",
+                              startValue: newTrackUrl,
+                              receiverId: selectedReceiver.receiverId,
+                            })
+                          }
+                          onBlur={() =>
+                            endContinuousInteraction({
+                              element: "tracks:new_url",
+                              endValue: newTrackUrl,
+                              receiverId: selectedReceiver.receiverId,
+                            })
+                          }
+                          onChange={(event) => setNewTrackUrl(event.target.value)}
+                        />
+                        <Button
+                          onClick={handleAddTrack}
+                          disabled={!newTrackLabel.trim() || !newTrackUrl.trim()}
                         >
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="text-sm font-medium">
-                                Track {trackId}
-                              </span>
-                              <Badge
-                                variant={track.playing ? "default" : "secondary"}
-                                className="text-xs"
-                              >
-                                {track.playing ? "Playing" : "Paused"}
-                              </Badge>
-                              {!track.playable && (
-                                <Badge variant="destructive" className="text-xs">
-                                  Disabled
-                                </Badge>
-                              )}
-                            </div>
+                          <Plus className="mr-2 h-4 w-4" />
+                          Add Track
+                        </Button>
+                      </div>
+                    </div>
+                    {selectedReceiver.config.tracks.map((track) => (
+                      <div
+                        key={track.trackId}
+                        className="rounded-xl border border-border/60 bg-muted/40 p-4"
+                      >
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
                             <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant={track.playing ? "secondary" : "default"}
-                                onClick={() =>
-                                  handleAudioControl(
-                                    trackId,
-                                    track.playing ? "pause" : "play"
-                                  )
-                                }
-                                disabled={!track.playable}
-                              >
-                                {track.playing ? (
-                                  <Pause className="w-3.5 h-3.5 mr-1" />
-                                ) : (
-                                  <Play className="w-3.5 h-3.5 mr-1" />
-                                )}
-                                {track.playing ? "Pause" : "Play"}
-                              </Button>
-                              <Separator
-                                orientation="vertical"
-                                className="h-6"
-                              />
-                              <div className="flex items-center gap-2">
-                                <Switch
-                                  checked={track.playable}
-                                  onCheckedChange={(checked) =>
-                                    handleAudioPlayable(trackId, checked)
-                                  }
-                                />
-                                <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                                  {track.playable ? (
-                                    <Volume2 className="w-3 h-3" />
-                                  ) : (
-                                    <VolumeX className="w-3 h-3" />
-                                  )}
-                                  {track.playable ? "Playable" : "Disabled"}
-                                </Label>
-                              </div>
+                              <span className="font-medium">{track.label}</span>
+                              <Badge variant={track.playing ? "default" : "secondary"}>
+                                {track.playing ? "Playing" : "Idle"}
+                              </Badge>
+                              {!track.playable ? (
+                                <Badge variant="destructive">Disabled</Badge>
+                              ) : null}
                             </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              `{track.trackId}` · volume {track.volumeValue.toFixed(2)} ·
+                              loop {track.loopEnabled ? "on" : "off"}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => handleTrackPlayState(track, true)}
+                              disabled={!track.playable}
+                            >
+                              <Volume2 className="mr-2 h-4 w-4" />
+                              Play
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleTrackPlayState(track, false)}
+                            >
+                              <VolumeX className="mr-2 h-4 w-4" />
+                              Pause
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleTrackRemove(track)}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Remove
+                            </Button>
                           </div>
                         </div>
-                      );
-                    })}
-                  </CardContent>
-                </Card>
-
-                {/* Color Control */}
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Palette className="w-4 h-4" />
-                      Icon Color
-                      <div
-                        className="w-5 h-5 rounded-full border border-border ml-auto"
-                        style={{ backgroundColor: selectedState.iconColor }}
-                      />
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {PRESET_COLORS.map((color) => (
-                        <button
-                          key={color}
-                          className={`w-8 h-8 rounded-full border-2 transition-all hover:scale-110 ${
-                            customColor === color
-                              ? "border-primary ring-2 ring-primary/30"
-                              : "border-border"
-                          }`}
-                          style={{ backgroundColor: color }}
-                          onClick={() => handleColorChange(color)}
-                        />
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={customColor}
-                        onChange={(e) => handleColorChange(e.target.value)}
-                        className="w-10 h-10 rounded cursor-pointer border border-border"
-                      />
-                      <span className="text-sm text-muted-foreground font-mono">
-                        {customColor}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Text Message */}
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <MessageSquare className="w-4 h-4" />
-                      Text Message
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {selectedState.lastMessage && (
-                      <div className="mb-3 p-2 rounded bg-muted/50 text-sm text-muted-foreground">
-                        Last sent: "{selectedState.lastMessage}"
+                        <Separator className="my-4" />
+                        <div className="grid gap-4 md:grid-cols-[1fr_1.4fr] md:items-center">
+                          <div>
+                            <p className="text-sm font-medium">Playable</p>
+                            <p className="text-xs text-muted-foreground">
+                              Backward-compatible replacement for
+                              `audio_playable`.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={track.playable}
+                            onCheckedChange={(checked) =>
+                              handleTrackPlayable(track, checked)
+                            }
+                          />
+                          <div>
+                            <p className="text-sm font-medium">Volume</p>
+                            <p className="text-xs text-muted-foreground">
+                              Continuous control posts only start/end interaction
+                              events to Unity.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <Slider
+                              value={[track.volumeValue]}
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              onFocus={() =>
+                                beginContinuousInteraction({
+                                  element: `track:${track.trackId}:volume`,
+                                  startValue: track.volumeValue,
+                                  receiverId: selectedReceiver.receiverId,
+                                })
+                              }
+                              onValueChange={([value]) =>
+                                handleTrackVolumeChange(track, value ?? 0)
+                              }
+                              onValueCommit={([value]) =>
+                                endContinuousInteraction({
+                                  element: `track:${track.trackId}:volume`,
+                                  endValue: value ?? 0,
+                                  receiverId: selectedReceiver.receiverId,
+                                })
+                              }
+                              onBlur={() =>
+                                endContinuousInteraction({
+                                  element: `track:${track.trackId}:volume`,
+                                  endValue: track.volumeValue,
+                                  receiverId: selectedReceiver.receiverId,
+                                })
+                              }
+                            />
+                            <span className="w-12 text-right text-xs text-muted-foreground">
+                              {Math.round(track.volumeValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                    )}
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
+                    ))}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Palette className="h-4 w-4" />
+                      Visuals & Text
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">Icon Color</Label>
+                        <Input
+                          type="color"
+                          value={customColor}
+                          className="h-10 w-20 p-1"
+                          onFocus={() =>
+                            beginContinuousInteraction({
+                              element: "visuals:iconColor",
+                              startValue: customColor,
+                              receiverId: selectedReceiver.receiverId,
+                            })
+                          }
+                          onBlur={() =>
+                            endContinuousInteraction({
+                              element: "visuals:iconColor",
+                              endValue: customColor,
+                              receiverId: selectedReceiver.receiverId,
+                            })
+                          }
+                          onChange={(event) =>
+                            handleColorChange(
+                              event.target.value,
+                              selectedReceiver.receiverId
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {PRESET_COLORS.map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            className="h-8 w-8 rounded-full border border-white/20 shadow-sm"
+                            style={{ backgroundColor: color }}
+                            onClick={() => {
+                              handleColorChange(color, selectedReceiver.receiverId);
+                              postDiscreteInteraction({
+                                action: "setColorPreset",
+                                element: "visuals:iconColor:preset",
+                                value: color,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                            aria-label={`Set color ${color}`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-3">
+                      <Label htmlFor="controller-text-message" className="text-sm font-medium">
+                        Text Message
+                      </Label>
+                      <Textarea
+                        id="controller-text-message"
+                        placeholder="Push a message to the selected receiver or broadcast to all receivers."
                         value={textInput}
-                        onChange={(e) => setTextInput(e.target.value)}
-                        onKeyDown={(e) =>
-                          e.key === "Enter" && handleTextMessage()
+                        onFocus={() =>
+                          beginContinuousInteraction({
+                            element: "textDisplay:composer",
+                            startValue: textInput,
+                            receiverId: selectedReceiver.receiverId,
+                          })
                         }
-                        placeholder="Type a message to send..."
-                        className="flex-1 px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                        onBlur={() =>
+                          endContinuousInteraction({
+                            element: "textDisplay:composer",
+                            endValue: textInput,
+                            receiverId: selectedReceiver.receiverId,
+                          })
+                        }
+                        onChange={(event) => setTextInput(event.target.value)}
                       />
-                      <Button onClick={handleTextMessage} disabled={!textInput.trim()}>
-                        <Send className="w-4 h-4 mr-1" />
-                        Send
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={handleBroadcastText}
-                        disabled={!textInput.trim()}
-                      >
-                        <Radio className="w-4 h-4 mr-1" />
-                        Broadcast
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button onClick={() => handleTextMessage(selectedReceiver.receiverId)}>
+                          <Send className="mr-2 h-4 w-4" />
+                          Send to Selected
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => handleTextMessage("*")}
+                        >
+                          Broadcast to All
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
               </>
             ) : (
               <Card>
-                <CardContent className="py-16 text-center text-muted-foreground">
-                  <Radio className="w-12 h-12 mx-auto mb-4 opacity-30" />
-                  <p className="text-lg font-medium">No Receiver Selected</p>
-                  <p className="text-sm mt-1">
-                    {receivers.length === 0
-                      ? "Waiting for receivers to connect..."
-                      : "Select a receiver from the list to begin controlling"}
-                  </p>
+                <CardContent className="py-14 text-center text-sm text-muted-foreground">
+                  Select a receiver to inspect its config snapshot and send unified
+                  commands.
                 </CardContent>
               </Card>
             )}
-          </div>
+          </section>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
 
-function ReceiverCard({
+function ReceiverSummaryCard({
   receiver,
   selected,
   onClick,
@@ -434,50 +769,35 @@ function ReceiverCard({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`w-full text-left p-3 rounded-lg border transition-all ${
+      className={`w-full rounded-xl border p-4 text-left transition ${
         selected
-          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-          : "border-border hover:border-primary/30 hover:bg-muted/50"
+          ? "border-primary/60 bg-primary/5"
+          : "border-border/60 bg-card hover:border-primary/30"
       }`}
     >
-      <div className="flex items-center justify-between mb-1">
-        <span className="font-medium text-sm">{receiver.label}</span>
-        <span
-          className={`w-2 h-2 rounded-full ${
-            receiver.connected ? "bg-green-500" : "bg-red-500"
-          }`}
-        />
-      </div>
-      <div className="text-xs text-muted-foreground">
-        ID: {receiver.receiverId}
-      </div>
-      {!receiver.connected && (
-        <div className="mt-1 text-[11px] text-amber-600">
-          Offline, removable now or auto-cleared in 10 min
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{receiver.label}</span>
+            <Badge variant={receiver.connected ? "default" : "secondary"}>
+              {receiver.connected ? "Online" : "Offline"}
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {receiver.receiverId}
+          </p>
         </div>
-      )}
-      <div className="flex items-center gap-2 mt-2">
-        <div
-          className="w-3 h-3 rounded-full border border-border"
-          style={{ backgroundColor: receiver.iconColor }}
-        />
-        <span className="text-xs text-muted-foreground">
-          T1:{" "}
-          {receiver.audio.track1.playing
-            ? "Playing"
-            : receiver.audio.track1.playable
-            ? "Ready"
-            : "Off"}
-          {" | "}
-          T2:{" "}
-          {receiver.audio.track2.playing
-            ? "Playing"
-            : receiver.audio.track2.playable
-            ? "Ready"
-            : "Off"}
-        </span>
+        <Badge variant="outline">v{receiver.configVersion}</Badge>
       </div>
+      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+        <span>{receiver.config.tracks.length} tracks</span>
+        <span>{receiver.config.visuals.iconColor}</span>
+      </div>
+      <p className="mt-2 truncate text-xs text-muted-foreground">
+        {receiver.config.textDisplay.text || "No active text message"}
+      </p>
     </button>
   );
 }

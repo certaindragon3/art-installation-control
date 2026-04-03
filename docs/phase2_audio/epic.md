@@ -56,3 +56,10 @@ interface GroupState {
 - [ ] 点击 volume 外部区域停止播放并关闭 volume
 - [ ] Volume 交互发送 startInteraction / endInteraction 到 Unity
 - [ ] Unity 可远程控制所有上述状态
+
+## 测试建议（无 Unity 客户端）
+
+- 在 `/controller` 和 `/receiver/:id` 间联调 loop、group、volume 的状态变化，重点看 receiver UI 与音频行为是否一致。
+- 用一个浏览器标签页模拟 Unity socket client，只监听 `interaction_event`，确认 volume 拖拽只发 `startInteraction` / `endInteraction`，不持续刷事件。
+- 为 group 动态增删改和 track 重新分组补 HTTP/Socket 测试，避免只靠手点验证。
+- 这一 phase 做完建议部署到 Zeabur，用手机或平板实测音量弹层、点击外部关闭、网络抖动下的播放状态同步。

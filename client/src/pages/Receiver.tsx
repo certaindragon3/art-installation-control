@@ -1,316 +1,319 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "wouter";
-import { useSocket } from "@/hooks/useSocket";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { useSocket } from "@/hooks/useSocket";
 import {
-  Wifi,
-  WifiOff,
+  createDefaultReceiverConfig,
+  type TrackState,
+} from "@shared/wsTypes";
+import {
+  Hexagon,
+  MessageSquare,
   Music,
   Volume2,
   VolumeX,
-  Hexagon,
-  MessageSquare,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
-import type {
-  ControlMessage,
-  AudioControlPayload,
-  AudioPlayablePayload,
-  ColorChangePayload,
-  TextMessagePayload,
-} from "@shared/wsTypes";
-import { AUDIO_URLS } from "@shared/wsTypes";
+
+function toPerceptualGain(value: number) {
+  if (value <= 0) {
+    return 0;
+  }
+
+  return Math.min(1, Math.pow(value, 1.8));
+}
+
+function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
+  if (!track.url) {
+    audio.pause();
+    return;
+  }
+
+  if (audio.src !== new URL(track.url, window.location.origin).toString()) {
+    audio.src = track.url;
+  }
+
+  audio.loop = track.loopEnabled;
+  audio.volume = toPerceptualGain(track.volumeValue);
+
+  if (!track.playable || !track.enabled || !track.visible) {
+    audio.pause();
+    return;
+  }
+
+  if (track.playing) {
+    audio.play().catch((error) => {
+      console.warn(`Failed to play ${track.trackId}:`, error);
+    });
+    return;
+  }
+
+  audio.pause();
+}
 
 export default function Receiver() {
   const params = useParams<{ id: string }>();
   const receiverId = params.id || "unknown";
-
-  const { connected, receiverState } = useSocket({
+  const { connected, receiverState, requestReceiverState } = useSocket({
     role: "receiver",
     receiverId,
     receiverLabel: `Receiver ${receiverId}`,
   });
 
-  // Audio state
-  const [track1Playing, setTrack1Playing] = useState(false);
-  const [track2Playing, setTrack2Playing] = useState(false);
-  const [track1Playable, setTrack1Playable] = useState(true);
-  const [track2Playable, setTrack2Playable] = useState(true);
-
-  // Visual state
-  const [iconColor, setIconColor] = useState("#6366f1");
-  const [lastMessage, setLastMessage] = useState("");
+  const audioMapRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const [messageFlash, setMessageFlash] = useState(false);
+  const config = useMemo(
+    () => receiverState?.config ?? createDefaultReceiverConfig(),
+    [receiverState]
+  );
+  const iconColor = config.visuals.iconColor;
 
-  // Audio refs
-  const audio1Ref = useRef<HTMLAudioElement | null>(null);
-  const audio2Ref = useRef<HTMLAudioElement | null>(null);
-
-  // Initialize audio elements
   useEffect(() => {
-    audio1Ref.current = new Audio(AUDIO_URLS.track1);
-    audio1Ref.current.loop = true;
-    audio2Ref.current = new Audio(AUDIO_URLS.track2);
-    audio2Ref.current.loop = true;
+    const audioMap = audioMapRef.current;
 
+    config.tracks.forEach((track) => {
+      const existing = audioMap.get(track.trackId);
+      if (existing) {
+        return;
+      }
+
+      const audio = new Audio(track.url);
+      audio.preload = "auto";
+      audioMap.set(track.trackId, audio);
+    });
+
+    Array.from(audioMap.entries()).forEach(([trackId, audio]) => {
+      if (config.tracks.some((track) => track.trackId === trackId)) {
+        return;
+      }
+
+      audio.pause();
+      audioMap.delete(trackId);
+    });
+  }, [config.tracks]);
+
+  useEffect(() => {
+    config.tracks.forEach((track) => {
+      const audio = audioMapRef.current.get(track.trackId);
+      if (!audio) {
+        return;
+      }
+
+      syncTrackAudio(audio, track);
+    });
+  }, [config.tracks]);
+
+  useEffect(() => {
+    if (!receiverState?.configExpiresAt) {
+      return;
+    }
+
+    const expiresAt = new Date(receiverState.configExpiresAt).getTime();
+    const waitMs = Math.max(0, expiresAt - Date.now() + 250);
+    const timer = window.setTimeout(() => {
+      requestReceiverState();
+    }, waitMs);
+
+    return () => window.clearTimeout(timer);
+  }, [receiverState?.configExpiresAt, requestReceiverState]);
+
+  useEffect(() => {
+    if (!config.textDisplay.text) {
+      return;
+    }
+
+    setMessageFlash(true);
+    const timer = window.setTimeout(() => setMessageFlash(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [config.textDisplay.text]);
+
+  useEffect(() => {
     return () => {
-      audio1Ref.current?.pause();
-      audio2Ref.current?.pause();
-      audio1Ref.current = null;
-      audio2Ref.current = null;
+      audioMapRef.current.forEach((audio) => {
+        audio.pause();
+      });
+      audioMapRef.current.clear();
     };
   }, []);
 
-  // Sync state from server on reconnection
-  useEffect(() => {
-    if (receiverState) {
-      setTrack1Playing(receiverState.audio.track1.playing);
-      setTrack2Playing(receiverState.audio.track2.playing);
-      setTrack1Playable(receiverState.audio.track1.playable);
-      setTrack2Playable(receiverState.audio.track2.playable);
-      setIconColor(receiverState.iconColor);
-      if (receiverState.lastMessage) {
-        setLastMessage(receiverState.lastMessage);
-      }
-    }
-  }, [receiverState]);
-
-  // Handle incoming commands
-  const handleCommand = useCallback(
-    (msg: ControlMessage) => {
-      switch (msg.type) {
-        case "audio_control": {
-          const payload = msg.payload as AudioControlPayload;
-          const audioEl =
-            payload.trackId === 1 ? audio1Ref.current : audio2Ref.current;
-          const setPlaying =
-            payload.trackId === 1 ? setTrack1Playing : setTrack2Playing;
-
-          if (payload.action === "play" && audioEl) {
-            audioEl.play().catch((e) => {
-              console.warn("Audio play failed:", e);
-            });
-            setPlaying(true);
-          } else if (payload.action === "pause" && audioEl) {
-            audioEl.pause();
-            setPlaying(false);
-          }
-          break;
-        }
-        case "audio_playable": {
-          const payload = msg.payload as AudioPlayablePayload;
-          const setPlayable =
-            payload.trackId === 1 ? setTrack1Playable : setTrack2Playable;
-          const audioEl =
-            payload.trackId === 1 ? audio1Ref.current : audio2Ref.current;
-          const setPlaying =
-            payload.trackId === 1 ? setTrack1Playing : setTrack2Playing;
-
-          setPlayable(payload.playable);
-          if (!payload.playable && audioEl) {
-            audioEl.pause();
-            setPlaying(false);
-          }
-          break;
-        }
-        case "color_change": {
-          const payload = msg.payload as ColorChangePayload;
-          setIconColor(payload.color);
-          break;
-        }
-        case "text_message": {
-          const payload = msg.payload as TextMessagePayload;
-          setLastMessage(payload.text);
-          setMessageFlash(true);
-          setTimeout(() => setMessageFlash(false), 1500);
-          break;
-        }
-      }
-    },
-    []
+  const activeTracks = useMemo(
+    () => config.tracks.filter((track) => track.visible),
+    [config.tracks]
   );
 
-  // Listen for custom events dispatched by the socket hook
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const customEvent = e as CustomEvent<ControlMessage>;
-      handleCommand(customEvent.detail);
-    };
-    window.addEventListener("receiver_command", handler);
-    return () => window.removeEventListener("receiver_command", handler);
-  }, [handleCommand]);
-
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border/50 bg-card/80 backdrop-blur-sm">
-        <div className="container flex items-center justify-between h-14">
+    <div className="min-h-screen bg-background">
+      <header className="border-b border-border/60 bg-card/85 backdrop-blur">
+        <div className="container flex h-14 items-center justify-between">
           <div className="flex items-center gap-3">
             <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-500"
-              style={{ backgroundColor: iconColor + "20" }}
+              className="flex h-9 w-9 items-center justify-center rounded-xl transition-colors duration-500"
+              style={{ backgroundColor: `${iconColor}20` }}
             >
-              <Hexagon
-                className="w-5 h-5 transition-colors duration-500"
-                style={{ color: iconColor }}
-              />
+              <Hexagon className="h-5 w-5" style={{ color: iconColor }} />
             </div>
             <div>
-              <h1 className="text-sm font-semibold">
-                Receiver: {receiverId}
-              </h1>
+              <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                Art Installation Terminal
+                State-driven config consumer
               </p>
             </div>
           </div>
-          <Badge
-            variant={connected ? "default" : "destructive"}
-            className="gap-1.5"
-          >
-            {connected ? (
-              <Wifi className="w-3 h-3" />
-            ) : (
-              <WifiOff className="w-3 h-3" />
-            )}
+          <Badge variant={connected ? "default" : "destructive"} className="gap-1.5">
+            {connected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
             {connected ? "Online" : "Offline"}
           </Badge>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 container py-8">
-        <div className="max-w-lg mx-auto space-y-6">
-          {/* Icon Display - Central Visual Element */}
-          <div className="flex flex-col items-center py-12">
+      <main className="container py-8">
+        <div className="mx-auto max-w-2xl space-y-6">
+          <section className="flex flex-col items-center py-10">
             <div
-              className="w-32 h-32 rounded-3xl flex items-center justify-center transition-all duration-700 ease-out shadow-lg"
+              className="flex h-36 w-36 items-center justify-center rounded-[2rem] shadow-lg transition-all duration-700"
               style={{
-                backgroundColor: iconColor + "15",
-                boxShadow: `0 0 60px ${iconColor}30, 0 0 120px ${iconColor}10`,
+                backgroundColor: `${iconColor}15`,
+                boxShadow: `0 0 50px ${iconColor}30, 0 0 120px ${iconColor}12`,
               }}
             >
               <Hexagon
-                className="w-20 h-20 transition-all duration-700 ease-out"
+                className="h-20 w-20 transition-all duration-700"
                 style={{
                   color: iconColor,
-                  filter: `drop-shadow(0 0 20px ${iconColor}60)`,
+                  filter: `drop-shadow(0 0 18px ${iconColor}60)`,
                 }}
               />
             </div>
-            <p className="mt-4 text-sm font-mono text-muted-foreground">
-              {iconColor}
+            <p className="mt-4 text-xs text-muted-foreground">
+              config v{receiverState?.configVersion ?? 0} · expires{" "}
+              {receiverState?.configExpiresAt
+                ? new Date(receiverState.configExpiresAt).toLocaleTimeString()
+                : "--:--:--"}
             </p>
-          </div>
+          </section>
 
-          {/* Audio Status */}
           <Card>
             <CardContent className="pt-6">
-              <div className="flex items-center gap-2 mb-4">
-                <Music className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Audio Tracks</span>
+              <div className="mb-4 flex items-center gap-2">
+                <Music className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Dynamic Tracks</span>
               </div>
               <div className="space-y-3">
-                {([
-                  {
-                    id: 1,
-                    playing: track1Playing,
-                    playable: track1Playable,
-                    label: "Track 1 - Boing",
-                  },
-                  {
-                    id: 2,
-                    playing: track2Playing,
-                    playable: track2Playable,
-                    label: "Track 2 - Womp Womp",
-                  },
-                ] as const).map((track) => (
+                {activeTracks.map((track) => (
                   <div
-                    key={track.id}
-                    className={`flex items-center justify-between p-3 rounded-lg transition-colors ${
+                    key={track.trackId}
+                    className={`rounded-xl border p-4 transition-colors ${
                       track.playing
-                        ? "bg-primary/10 border border-primary/20"
-                        : "bg-muted/50"
+                        ? "border-primary/30 bg-primary/8"
+                        : "border-border/60 bg-muted/40"
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      {track.playable ? (
-                        <Volume2
-                          className={`w-4 h-4 ${
-                            track.playing
-                              ? "text-primary animate-pulse"
-                              : "text-muted-foreground"
-                          }`}
-                        />
-                      ) : (
-                        <VolumeX className="w-4 h-4 text-destructive" />
-                      )}
-                      <span className="text-sm">{track.label}</span>
-                    </div>
-                    <Badge
-                      variant={
-                        track.playing
-                          ? "default"
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        {track.playable ? (
+                          <Volume2
+                            className={`h-4 w-4 ${
+                              track.playing
+                                ? "animate-pulse text-primary"
+                                : "text-muted-foreground"
+                            }`}
+                          />
+                        ) : (
+                          <VolumeX className="h-4 w-4 text-destructive" />
+                        )}
+                        <div>
+                          <p className="text-sm font-medium">{track.label}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {track.trackId} · fill {track.fillTime}s · loop{" "}
+                            {track.loopEnabled ? "on" : "off"}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge
+                        variant={
+                          track.playing
+                            ? "default"
+                            : track.playable
+                              ? "secondary"
+                              : "destructive"
+                        }
+                      >
+                        {track.playing
+                          ? "Playing"
                           : track.playable
-                          ? "secondary"
-                          : "destructive"
-                      }
-                      className="text-xs"
-                    >
-                      {track.playing
-                        ? "Playing"
-                        : track.playable
-                        ? "Ready"
-                        : "Disabled"}
-                    </Badge>
+                            ? "Ready"
+                            : "Muted"}
+                      </Badge>
+                    </div>
                   </div>
                 ))}
               </div>
             </CardContent>
           </Card>
 
-          {/* Text Message Display */}
           <Card>
             <CardContent className="pt-6">
-              <div className="flex items-center gap-2 mb-4">
-                <MessageSquare className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Message</span>
+              <div className="mb-4 flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Text Display</span>
               </div>
               <div
-                className={`min-h-[80px] p-4 rounded-lg border transition-all duration-300 flex items-center justify-center ${
-                  messageFlash
-                    ? "bg-primary/10 border-primary/30"
-                    : "bg-muted/30 border-border"
+                className={`rounded-xl border px-4 py-6 text-center transition-all ${
+                  messageFlash ? "border-primary/40 bg-primary/10" : "bg-muted/40"
                 }`}
               >
-                {lastMessage ? (
-                  <p
-                    className={`text-center text-lg transition-all duration-300 ${
-                      messageFlash
-                        ? "text-primary font-semibold scale-105"
-                        : "text-foreground"
-                    }`}
-                  >
-                    {lastMessage}
-                  </p>
-                ) : (
-                  <p className="text-muted-foreground text-sm">
-                    Waiting for messages...
-                  </p>
-                )}
+                <p className="text-sm leading-6">
+                  {config.textDisplay.text || "No active message"}
+                </p>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="grid gap-4 pt-6 sm:grid-cols-2">
+              <ReceiverMetaTile
+                label="Pulse"
+                value={config.pulse.active ? `${config.pulse.bpm} BPM` : "Off"}
+              />
+              <ReceiverMetaTile
+                label="Score"
+                value={config.score.visible ? String(config.score.value) : "Hidden"}
+              />
+              <ReceiverMetaTile
+                label="Map"
+                value={
+                  config.map.visible
+                    ? `${config.map.playerPosX.toFixed(2)}, ${config.map.playerPosY.toFixed(2)}`
+                    : "Hidden"
+                }
+              />
+              <ReceiverMetaTile
+                label="Vote"
+                value={config.vote ? `${config.vote.options.length} options` : "Inactive"}
+              />
             </CardContent>
           </Card>
         </div>
       </main>
+    </div>
+  );
+}
 
-      {/* Footer */}
-      <footer className="border-t border-border/50 py-3">
-        <div className="container text-center text-xs text-muted-foreground">
-          Receiver ID: {receiverId} | WebSocket:{" "}
-          {connected ? "Connected" : "Reconnecting..."}
-        </div>
-      </footer>
+function ReceiverMetaTile({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/35 p-4">
+      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-medium">{value}</p>
     </div>
   );
 }

@@ -54,8 +54,15 @@ pnpm vitest run server/wsServer.test.ts
 - `shared/` — 前后端共享类型
   - `wsTypes.ts` — 所有 Socket.IO 事件名（`WS_EVENTS`）、消息类型定义、`AUDIO_URLS`
 - `docs/`
-  - `unity-controller-api.md` — Unity 接入说明，优先推荐 HTTP API
-  - `examples/UnityArtInstallationController.cs` — Unity `UnityWebRequest` 最小示例
+  - `requirements-master.md` — 导师需求主文档（所有功能需求的 source of truth）
+  - `phase0_deliverables/` — Phase 0 已交付内容（HTTP API 文档 + Unity 示例）
+  - `phase1_architecture/` — Phase 1: 架构升级（unified command, state-driven, postToUnity, 动态 tracks）
+  - `phase2_audio/` — Phase 2: 音频增强（looping, groups, volume）
+  - `phase3_pulse_markers/` — Phase 3: Pulse/Tempo + Track Markers
+  - `phase4_voting/` — Phase 4: 投票系统
+  - `phase5_scoring_map/` — Phase 5: 计分 + 教室地图
+  - `phase6_timing/` — Phase 6: Timing Challenge Mode
+  - `phase7_optional/` — Phase 7: 可选功能（Filter, Recording）
 
 ### 路径别名
 
@@ -97,6 +104,24 @@ Receiver (浏览器)
 
 - 前端构建到 `dist/public/`
 - 服务端用 esbuild 打包到 `dist/index.js`，`--external:./vite` 防止 Vite 被误打包
+
+## 开发路线图
+
+项目按 Phase（Epic）分阶段推进，每个 phase 的设计文档在 `docs/phase{N}_xxx/epic.md`。
+
+**开发顺序：Phase 1 → 2 → 3 → 4 → 5 → 6 → 7（可选）**
+
+- Phase 1 是所有后续 phase 的基础，必须先完成
+- Phase 2/3/4/5 互相独立，完成 Phase 1 后可并行
+- Phase 6 依赖 Phase 3（pulse sync）
+- Phase 7 为导师标注的 OPTIONAL / SUPER OPTIONAL 功能，排在最后
+
+**每完成一个 phase：**
+1. 确保类型检查 (`pnpm check`) 和测试 (`pnpm test`) 通过
+2. 在该 phase 的 `epic.md` 中勾选验收标准
+3. 提交 commit 并标注 phase 编号
+
+**需求主文档：** `docs/requirements-master.md` — 导师原始需求，是所有 epic 设计的 source of truth。
 
 ## 部署
 

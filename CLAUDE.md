@@ -149,5 +149,33 @@ Receiver (浏览器)
 - 当前项目已配置 `@shadcn` registry，风格以 `components.json` 为准（`new-york`、`neutral`、CSS variables）。
 - 当前项目额外启用了 `@diceui`、`@kibo-ui`、`@cult-ui`、`@magicui`、`@motion-primitives`、`@react-bits` 作为补充 registry。
 - 组件选择上优先顺序为：基础表单/可访问性看 `@shadcn`、`@diceui`、`@kibo-ui`；更强的动效和视觉表达看 `@cult-ui`、`@magicui`、`@motion-primitives`、`@react-bits`。
-- 需要新增 `shadcn` 组件、示例或命令时，优先使用 `shadcn` MCP 工具能力，例如查询 registry、查看示例、生成 add command，而不是凭记忆手写。
+- 需要新增 `shadcn` 组件、示例或命令时，不要凭记忆手写。若当前 agent 自带的 `shadcn` MCP 无法可靠识别第三方 registry，优先改用本机 `Claude Code CLI` 查询。
 - 如果需求超出 `shadcn` 现成组件范围，应先用 `shadcn` 组件搭骨架，再只对必要部分做定制化样式或行为扩展。
+
+## Claude Code UI 工作流
+
+- 只要任务的核心是 UI 设计、视觉探索、页面改版、动效方案选择、组件选型，默认先使用 `Claude Code CLI` 进行设计，而不是直接开始手写界面。
+- 本仓库里的 `Claude Code` 已验证可通过 `shadcn` MCP 查询第三方 registry；因此凡是需要搜索 `@diceui`、`@kibo-ui`、`@cult-ui`、`@magicui`、`@motion-primitives`、`@react-bits` 时，优先使用 `Claude Code CLI`。
+- 运行 `Claude Code CLI` 时必须从仓库根目录执行，确保它读取当前项目的 `components.json` 与 `.claude/settings.local.json`。
+- 推荐命令：
+
+```bash
+# 查看 Claude Code CLI 用法
+claude --help
+
+# 确认 shadcn MCP 已连接
+claude mcp list
+
+# 单次非交互式 UI 设计/组件探索
+claude -p "Use the shadcn MCP in this project to search @shadcn @diceui @kibo-ui @cult-ui @magicui @motion-primitives @react-bits for components suitable for <task>. Return a concise UI direction, candidate components, and exact add command arguments."
+
+# 进入交互式会话，适合多轮 UI 迭代
+claude
+```
+
+- 使用 `Claude Code` 产出 UI 方案时，至少要求它返回：
+  1. 视觉方向或布局方案
+  2. 命中的 registry 和组件名
+  3. 具体 `add` 命令参数
+  4. 最终建议的组件组合方式
+- `Claude Code` 给出的组件方案仍需遵守本仓库的既有视觉语言；基础结构优先 `@shadcn`、`@diceui`、`@kibo-ui`，更强视觉表达再按需引入 `@cult-ui`、`@magicui`、`@motion-primitives`、`@react-bits`。

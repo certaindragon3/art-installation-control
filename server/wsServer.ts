@@ -2,6 +2,11 @@ import { Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
 import { clampVolumeValue } from "../shared/audio";
 import {
+  clampPulseBpm,
+  createPulseScheduler,
+  type PulseScheduler,
+} from "./pulseScheduler";
+import {
   CONFIG_TTL_MS,
   type ControlInputMessage,
   createDefaultReceiverConfig,
@@ -38,6 +43,7 @@ const RECEIVER_CLEANUP_INTERVAL_MS = 60 * 1000;
 const receivers = new Map<string, InternalReceiverState>();
 const controllers = new Set<string>();
 const unities = new Set<string>();
+const pulseLoops = new Map<string, PulseScheduler>();
 
 let io: Server | null = null;
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -89,6 +95,47 @@ function emitReceiverStateToRoom(
     WS_EVENTS.RECEIVER_STATE_UPDATE,
     serializeReceiverState(state)
   );
+}
+
+function destroyPulseLoop(receiverId: string) {
+  const loop = pulseLoops.get(receiverId);
+  if (!loop) {
+    return;
+  }
+
+  loop.stop();
+  pulseLoops.delete(receiverId);
+}
+
+function shouldPulseRun(state: InternalReceiverState) {
+  return (
+    state.connected && state.config.pulse.enabled && state.config.pulse.active
+  );
+}
+
+function syncPulseLoop(receiverId: string, state: InternalReceiverState) {
+  if (!io || !shouldPulseRun(state)) {
+    destroyPulseLoop(receiverId);
+    return;
+  }
+
+  const existingLoop = pulseLoops.get(receiverId);
+  if (existingLoop) {
+    existingLoop.updateBpm(state.config.pulse.bpm);
+    existingLoop.start();
+    return;
+  }
+
+  const loop = createPulseScheduler({
+    receiverId,
+    bpm: state.config.pulse.bpm,
+    onPulse: event => {
+      io?.to(`receiver:${receiverId}`).emit(WS_EVENTS.PULSE, event);
+    },
+  });
+
+  pulseLoops.set(receiverId, loop);
+  loop.start();
 }
 
 function canSendControlCommands(socket: Socket, input: ControlInputMessage) {
@@ -370,6 +417,29 @@ function assignModulePatch<T extends ModuleName>(
   return true;
 }
 
+function assignPulsePatch(
+  state: InternalReceiverState,
+  patch: SetModuleStatePayload["patch"]
+) {
+  if (typeof patch.visible === "boolean") {
+    state.config.pulse.visible = patch.visible;
+  }
+
+  if (typeof patch.enabled === "boolean") {
+    state.config.pulse.enabled = patch.enabled;
+  }
+
+  if (typeof patch.active === "boolean") {
+    state.config.pulse.active = patch.active;
+  }
+
+  if (typeof patch.bpm === "number") {
+    state.config.pulse.bpm = clampPulseBpm(patch.bpm, state.config.pulse.bpm);
+  }
+
+  return true;
+}
+
 function stopAllTracks(state: InternalReceiverState) {
   state.config.tracks.forEach(track => {
     track.playing = false;
@@ -397,7 +467,7 @@ function applyCommand(
         return assignModulePatch(state, "textDisplay", command.payload.patch);
       }
       if (command.payload.module === "pulse") {
-        return assignModulePatch(state, "pulse", command.payload.patch);
+        return assignPulsePatch(state, command.payload.patch);
       }
       if (command.payload.module === "score") {
         return assignModulePatch(state, "score", command.payload.patch);
@@ -452,6 +522,7 @@ function removeDisconnectedReceivers(): string[] {
 
   receivers.forEach((state, receiverId) => {
     if (!state.connected) {
+      destroyPulseLoop(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
     }
@@ -468,6 +539,7 @@ function removeExpiredReceivers(now = Date.now()): string[] {
       state.disconnectedAt !== null &&
       now - state.disconnectedAt >= RECEIVER_RETENTION_MS
     ) {
+      destroyPulseLoop(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
     }
@@ -539,6 +611,7 @@ function registerReceiver(socket: Socket, data: ReceiverRegistration) {
   }
 
   socket.join(`receiver:${receiverId}`);
+  syncPulseLoop(receiverId, receivers.get(receiverId)!);
   emitReceiverState(socket, receivers.get(receiverId)!);
   broadcastReceiverList();
 }
@@ -553,6 +626,7 @@ function handleDisconnect(socket: Socket) {
       state.disconnectedAt = Date.now();
       stopAllTracks(state);
       incrementConfigVersion(state);
+      syncPulseLoop(state.receiverId, state);
     }
   });
 
@@ -675,6 +749,7 @@ export function dispatchControlMessage(
           incrementConfigVersion(state);
         }
 
+        syncPulseLoop(receiverId, state);
         io!
           .to(`receiver:${receiverId}`)
           .emit(WS_EVENTS.RECEIVER_COMMAND, command);
@@ -707,6 +782,7 @@ export function dispatchControlMessage(
     incrementConfigVersion(state);
   }
 
+  syncPulseLoop(command.targetId, state);
   io.to(`receiver:${command.targetId}`).emit(
     WS_EVENTS.RECEIVER_COMMAND,
     command
@@ -735,6 +811,8 @@ export function clearOfflineReceivers() {
 export async function resetWebSocketState() {
   controllers.clear();
   unities.clear();
+  pulseLoops.forEach(loop => loop.stop());
+  pulseLoops.clear();
   receivers.clear();
 
   if (cleanupInterval) {

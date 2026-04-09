@@ -239,6 +239,14 @@ export interface ConfigSnapshotResponse {
   receivers: ReceiverState[];
 }
 
+export interface PulseEvent {
+  receiverId: string;
+  bpm: number;
+  intervalMs: number;
+  sequence: number;
+  timestamp: number;
+}
+
 // ─── Unity Interaction Events ────────────────────────────────────────
 export interface UnityInteractionEvent {
   sourceRole: "controller" | "receiver";
@@ -261,6 +269,7 @@ export const WS_EVENTS = {
   CONTROL_MESSAGE: "control_message",
   CLEAR_OFFLINE_RECEIVERS: "clear_offline_receivers",
   INTERACTION_EVENT: "interaction_event",
+  PULSE: "pulse",
 
   RECEIVER_LIST: "receiver_list",
   RECEIVER_COMMAND: "receiver_command",

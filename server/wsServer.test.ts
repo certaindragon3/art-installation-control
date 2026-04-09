@@ -18,6 +18,7 @@ describe("Phase 1 shared protocol", () => {
     expect(WS_EVENTS.REQUEST_RECEIVER_STATE).toBe("request_receiver_state");
     expect(WS_EVENTS.CONTROL_MESSAGE).toBe("control_message");
     expect(WS_EVENTS.INTERACTION_EVENT).toBe("interaction_event");
+    expect(WS_EVENTS.PULSE).toBe("pulse");
     expect(WS_EVENTS.RECEIVER_STATE_UPDATE).toBe("receiver_state_update");
   });
 
@@ -37,8 +38,16 @@ describe("Phase 1 shared protocol", () => {
       volumeValue: 1,
       volumeControlVisible: false,
       volumeControlEnabled: true,
+      tempoFlashEnabled: false,
+      fillTime: 1,
     });
     expect(config.groups).toEqual([]);
+    expect(config.pulse).toMatchObject({
+      visible: false,
+      enabled: false,
+      active: false,
+      bpm: 90,
+    });
     expect(config.visuals).toMatchObject({
       visible: true,
       enabled: true,

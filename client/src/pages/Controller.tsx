@@ -158,6 +158,10 @@ export default function Controller() {
     () => selectedReceiver?.config.groups ?? [],
     [selectedReceiver]
   );
+  const selectedPulse = useMemo(
+    () => selectedReceiver?.config.pulse ?? null,
+    [selectedReceiver]
+  );
   const offlineReceivers = useMemo(
     () => receivers.filter(receiver => !receiver.connected),
     [receivers]
@@ -202,6 +206,29 @@ export default function Controller() {
         targetId: selectedReceiver.receiverId,
         payload: {
           groupId,
+          patch,
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const patchPulse = useCallback(
+    (patch: {
+      active?: boolean;
+      bpm?: number;
+      enabled?: boolean;
+      visible?: boolean;
+    }) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          module: "pulse",
           patch,
         },
       });
@@ -506,10 +533,10 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 2 Controller
+                Phase 3 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Loop, groups, and volume-state orchestration
+                Pulse orchestration, track markers, and audio-state control
               </p>
             </div>
           </div>
@@ -568,7 +595,7 @@ export default function Controller() {
                       <EmptyTitle>No Receivers Yet</EmptyTitle>
                       <EmptyDescription>
                         Open `/receiver/:id` in another tab to register a
-                        receiver before sending phase 2 commands.
+                        receiver before sending phase 3 commands.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -598,7 +625,7 @@ export default function Controller() {
                 <CardTitle className="text-base">System Actions</CardTitle>
                 <CardDescription>
                   Reset clears loop, groups, volume state, text, and all other
-                  runtime modules.
+                  runtime modules, including pulse tempo and marker state.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -655,6 +682,133 @@ export default function Controller() {
 
             {selectedReceiver ? (
               <>
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Zap />
+                      Pulse & Tempo
+                    </CardTitle>
+                    <CardDescription>
+                      Server-side pulse stays authoritative so receivers can
+                      sync to one clock instead of drifting locally.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">Pulse Active</p>
+                          <p className="text-xs text-muted-foreground">
+                            Starts or stops the server-generated beat stream.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={selectedPulse?.active ?? false}
+                          onCheckedChange={checked => {
+                            patchPulse({
+                              active: checked,
+                              enabled: true,
+                            });
+                            postDiscreteInteraction({
+                              action: checked ? "startPulse" : "stopPulse",
+                              element: "pulse:active",
+                              value: checked,
+                              receiverId: selectedReceiver.receiverId,
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">
+                            Pulse UI Visible
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Keeps the receiver-side heartbeat status card
+                            visible.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={selectedPulse?.visible ?? false}
+                          onCheckedChange={checked => {
+                            patchPulse({
+                              visible: checked,
+                              enabled: true,
+                            });
+                            postDiscreteInteraction({
+                              action: "togglePulseVisible",
+                              element: "pulse:visible",
+                              value: checked,
+                              receiverId: selectedReceiver.receiverId,
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div className="rounded-lg border border-border/60 px-3 py-3 md:col-span-2">
+                        <div className="mb-3 flex items-center gap-2">
+                          <Zap className="text-muted-foreground" />
+                          <div>
+                            <p className="text-sm font-medium">BPM</p>
+                            <p className="text-xs text-muted-foreground">
+                              Changing BPM reschedules the pulse loop on the
+                              server immediately.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <Slider
+                            value={[selectedPulse?.bpm ?? 90]}
+                            min={30}
+                            max={240}
+                            step={1}
+                            onPointerDownCapture={() =>
+                              beginContinuousInteraction({
+                                element: "pulse:bpm",
+                                startValue: selectedPulse?.bpm ?? 90,
+                                receiverId: selectedReceiver.receiverId,
+                              })
+                            }
+                            onValueChange={([value]) =>
+                              patchPulse({
+                                bpm: value ?? 90,
+                                enabled: true,
+                              })
+                            }
+                            onValueCommit={([value]) => {
+                              postDiscreteInteraction({
+                                action: "setPulseBpm",
+                                element: "pulse:bpm",
+                                value: value ?? 90,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                              endContinuousInteraction({
+                                element: "pulse:bpm",
+                                endValue: value ?? 90,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          />
+                          <Input
+                            type="number"
+                            min={30}
+                            max={240}
+                            value={selectedPulse?.bpm ?? 90}
+                            className="w-24"
+                            onChange={event =>
+                              patchPulse({
+                                bpm: Number(event.target.value),
+                                enabled: true,
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card>
                   <CardHeader className="pb-3">
                     <CardTitle className="flex items-center gap-2 text-base">
@@ -777,11 +931,11 @@ export default function Controller() {
                   <CardHeader className="pb-3">
                     <CardTitle className="flex items-center gap-2 text-base">
                       <Music />
-                      Tracks, Loop, and Volume
+                      Tracks, Markers, and Volume
                     </CardTitle>
                     <CardDescription>
-                      Assign groups, lock or hide loop controls, and tune volume
-                      defaults before the receiver opens its popup.
+                      Assign groups, tune tempo markers, and set fill timing
+                      before the receiver animates each track.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -1003,7 +1157,7 @@ export default function Controller() {
                       <EmptyTitle>Select a Receiver</EmptyTitle>
                       <EmptyDescription>
                         Pick a receiver to inspect its live config snapshot and
-                        drive phase 2 commands.
+                        drive phase 3 commands.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -1222,8 +1376,9 @@ function TrackControlCard({
             ) : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            {track.trackId} · loop {track.loopEnabled ? "on" : "off"} · volume
-            UI {track.volumeControlVisible ? "visible" : "hidden"}
+            {track.trackId} · loop {track.loopEnabled ? "on" : "off"} · marker{" "}
+            {track.tempoFlashEnabled ? "armed" : "idle"} · volume UI{" "}
+            {track.volumeControlVisible ? "visible" : "hidden"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1351,6 +1506,27 @@ function TrackControlCard({
 
         <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
           <div>
+            <p className="text-sm font-medium">Tempo Flash Enabled</p>
+            <p className="text-xs text-muted-foreground">
+              Receiver markers flash in time with the pulse stream.
+            </p>
+          </div>
+          <Switch
+            checked={track.tempoFlashEnabled}
+            onCheckedChange={checked => {
+              onTrackPatch(track.trackId, { tempoFlashEnabled: checked });
+              postDiscreteInteraction({
+                action: "toggleTempoFlash",
+                element: `track:${track.trackId}:tempo_flash`,
+                value: checked,
+                receiverId,
+              });
+            }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+          <div>
             <p className="text-sm font-medium">Volume Popup Visible</p>
             <p className="text-xs text-muted-foreground">
               Remote override for showing or hiding the popup control.
@@ -1389,6 +1565,65 @@ function TrackControlCard({
               });
             }}
           />
+        </div>
+
+        <div className="rounded-lg border border-border/60 px-3 py-3 md:col-span-2">
+          <div className="mb-3 flex items-center gap-2">
+            <Zap className="text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">Fill Time</p>
+              <p className="text-xs text-muted-foreground">
+                Progress loops from empty to full, then triggers a flash.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Slider
+              value={[track.fillTime]}
+              min={0.1}
+              max={8}
+              step={0.1}
+              onPointerDownCapture={() =>
+                beginContinuousInteraction({
+                  element: `track:${track.trackId}:fill_time`,
+                  startValue: track.fillTime,
+                  receiverId,
+                })
+              }
+              onValueChange={([value]) =>
+                onTrackPatch(track.trackId, { fillTime: value ?? 0.1 })
+              }
+              onValueCommit={([value]) => {
+                postDiscreteInteraction({
+                  action: "setFillTime",
+                  element: `track:${track.trackId}:fill_time`,
+                  value: value ?? 0.1,
+                  receiverId,
+                });
+                endContinuousInteraction({
+                  element: `track:${track.trackId}:fill_time`,
+                  endValue: value ?? 0.1,
+                  receiverId,
+                });
+              }}
+            />
+            <Input
+              type="number"
+              min={0.1}
+              max={8}
+              step={0.1}
+              className="w-24"
+              value={track.fillTime}
+              onChange={event =>
+                onTrackPatch(track.trackId, {
+                  fillTime: Number(event.target.value),
+                })
+              }
+            />
+            <span className="w-16 text-right text-xs text-muted-foreground">
+              {track.fillTime.toFixed(1)}s
+            </span>
+          </div>
         </div>
 
         <div className="rounded-lg border border-border/60 px-3 py-3 md:col-span-2">

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useParams } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,13 +30,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { usePostToUnity } from "@/hooks/usePostToUnity";
 import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
-import { createDefaultReceiverConfig, type TrackState } from "@shared/wsTypes";
+import {
+  createDefaultReceiverConfig,
+  type PulseEvent,
+  type TrackState,
+} from "@shared/wsTypes";
 import {
   AudioLines,
   Hexagon,
@@ -40,6 +52,7 @@ import {
   VolumeX,
   Wifi,
   WifiOff,
+  Zap,
 } from "lucide-react";
 
 function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
@@ -76,6 +89,7 @@ export default function Receiver() {
   const {
     connected,
     receiverState,
+    pulseEvent,
     requestReceiverState,
     sendCommand,
     postInteraction,
@@ -102,12 +116,14 @@ export default function Receiver() {
   const [activeVolumeTrackId, setActiveVolumeTrackId] = useState<string | null>(
     null
   );
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const config = useMemo(
     () => receiverState?.config ?? createDefaultReceiverConfig(),
     [receiverState]
   );
   const iconColor = config.visuals.iconColor;
+  const pulseEnabled = config.pulse.enabled && config.pulse.active;
 
   const dispatchTrackPatch = useCallback(
     (trackId: string, patch: Partial<TrackState>) => {
@@ -184,6 +200,24 @@ export default function Receiver() {
   }, [config.textDisplay.text]);
 
   useEffect(() => {
+    if (!pulseEnabled) {
+      return;
+    }
+
+    let frameId = 0;
+
+    const tick = () => {
+      startTransition(() => {
+        setNowMs(Date.now());
+      });
+      frameId = window.requestAnimationFrame(tick);
+    };
+
+    frameId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [pulseEnabled]);
+
+  useEffect(() => {
     return () => {
       audioMapRef.current.forEach(audio => {
         audio.pause();
@@ -235,6 +269,15 @@ export default function Receiver() {
       ),
     [groupTrackMap, hiddenOrMissingGroupIds, visibleTracks]
   );
+
+  const pulsePhase = useMemo(() => {
+    if (!pulseEnabled || !pulseEvent) {
+      return 0;
+    }
+
+    const elapsed = Math.max(0, nowMs - pulseEvent.timestamp);
+    return Math.min(100, (elapsed / pulseEvent.intervalMs) * 100);
+  }, [nowMs, pulseEnabled, pulseEvent]);
 
   useEffect(() => {
     setSelectedTrackByGroup(current => {
@@ -381,7 +424,7 @@ export default function Receiver() {
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                Phase 2 audio interaction surface
+                Phase 3 pulse-synced interaction surface
               </p>
             </div>
           </div>
@@ -421,6 +464,45 @@ export default function Receiver() {
             </p>
           </section>
 
+          {config.pulse.visible || pulseEnabled ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Zap />
+                  Pulse Sync
+                </CardTitle>
+                <CardDescription>
+                  Server-side beat messages keep every receiver aligned to one
+                  clock.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={pulseEnabled ? "default" : "secondary"}>
+                    {pulseEnabled ? "Pulse Live" : "Pulse Idle"}
+                  </Badge>
+                  <Badge variant="outline">{config.pulse.bpm} BPM</Badge>
+                  {pulseEvent ? (
+                    <Badge variant="outline">
+                      Beat #{pulseEvent.sequence + 1}
+                    </Badge>
+                  ) : null}
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-muted/30 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>Beat Phase</span>
+                    <span>
+                      {pulseEnabled && pulseEvent
+                        ? `${Math.round(pulsePhase)}%`
+                        : "Waiting"}
+                    </span>
+                  </div>
+                  <Progress value={pulsePhase} className="h-3" />
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
           {visibleGroups.length > 0 ? (
             <Card>
               <CardHeader className="pb-3">
@@ -429,8 +511,8 @@ export default function Receiver() {
                   Sample Groups
                 </CardTitle>
                 <CardDescription>
-                  Group dropdowns stay dynamic and gray out when access is
-                  disabled.
+                  Group dropdowns stay dynamic while track markers continue to
+                  sync to the shared beat.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -515,6 +597,8 @@ export default function Receiver() {
                         onVolumeOpen={trackId =>
                           setActiveVolumeTrackId(trackId)
                         }
+                        nowMs={nowMs}
+                        pulseEvent={pulseEvent}
                         beginContinuousInteraction={beginContinuousInteraction}
                         endContinuousInteraction={endContinuousInteraction}
                       />
@@ -533,7 +617,8 @@ export default function Receiver() {
                   Direct Tracks
                 </CardTitle>
                 <CardDescription>
-                  Tracks without a visible group remain directly playable.
+                  Tracks without a visible group remain directly playable and
+                  keep their own fill markers.
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 lg:grid-cols-2">
@@ -548,6 +633,8 @@ export default function Receiver() {
                     onVolumeChange={handleVolumeChange}
                     onVolumeDismiss={handleVolumeDismiss}
                     onVolumeOpen={trackId => setActiveVolumeTrackId(trackId)}
+                    nowMs={nowMs}
+                    pulseEvent={pulseEvent}
                     beginContinuousInteraction={beginContinuousInteraction}
                     endContinuousInteraction={endContinuousInteraction}
                   />
@@ -593,6 +680,8 @@ function ReceiverTrackCard({
   onVolumeChange,
   onVolumeDismiss,
   onVolumeOpen,
+  nowMs,
+  pulseEvent,
   beginContinuousInteraction,
   endContinuousInteraction,
 }: {
@@ -604,6 +693,8 @@ function ReceiverTrackCard({
   onVolumeChange: (track: TrackState, value: number) => void;
   onVolumeDismiss: (track: TrackState) => void;
   onVolumeOpen: (trackId: string | null) => void;
+  nowMs: number;
+  pulseEvent: PulseEvent | null;
   beginContinuousInteraction: ReturnType<
     typeof usePostToUnity
   >["beginContinuousInteraction"];
@@ -611,14 +702,102 @@ function ReceiverTrackCard({
     typeof usePostToUnity
   >["endContinuousInteraction"];
 }) {
+  const fillDurationMs = Math.max(0, track.fillTime) * 1000;
   const volumeOpen =
     activeVolumeTrackId === track.trackId &&
     track.playing &&
     track.volumeControlVisible &&
     track.volumeControlEnabled;
+  const [fillCycleStartedAt, setFillCycleStartedAt] = useState<number | null>(
+    pulseEvent?.timestamp ?? null
+  );
+  const [lastFillFlashAt, setLastFillFlashAt] = useState<number | null>(null);
+  const lastPulseSequenceRef = useRef<number | null>(null);
+  const lastCompletedCycleRef = useRef<number>(-1);
+
+  useEffect(() => {
+    lastPulseSequenceRef.current = null;
+    lastCompletedCycleRef.current = -1;
+    setLastFillFlashAt(null);
+    setFillCycleStartedAt(pulseEvent?.timestamp ?? null);
+  }, [track.fillTime, track.trackId]);
+
+  useEffect(() => {
+    if (!pulseEvent || lastPulseSequenceRef.current === pulseEvent.sequence) {
+      return;
+    }
+
+    lastPulseSequenceRef.current = pulseEvent.sequence;
+    setFillCycleStartedAt(current => {
+      if (current === null || fillDurationMs === 0) {
+        return pulseEvent.timestamp;
+      }
+
+      const elapsed = pulseEvent.timestamp - current;
+      if (
+        elapsed >= fillDurationMs ||
+        fillDurationMs <= pulseEvent.intervalMs
+      ) {
+        return pulseEvent.timestamp;
+      }
+
+      return current;
+    });
+  }, [fillDurationMs, pulseEvent]);
+
+  useEffect(() => {
+    if (fillDurationMs <= 0 || fillCycleStartedAt === null) {
+      lastCompletedCycleRef.current = -1;
+      return;
+    }
+
+    const completedCycles = Math.floor(
+      Math.max(0, nowMs - fillCycleStartedAt) / fillDurationMs
+    );
+    if (
+      completedCycles <= 0 ||
+      completedCycles === lastCompletedCycleRef.current
+    ) {
+      return;
+    }
+
+    lastCompletedCycleRef.current = completedCycles;
+    setLastFillFlashAt(fillCycleStartedAt + completedCycles * fillDurationMs);
+  }, [fillCycleStartedAt, fillDurationMs, nowMs]);
+
+  const fillProgress = useMemo(() => {
+    if (fillDurationMs === 0) {
+      return 100;
+    }
+
+    if (fillCycleStartedAt === null) {
+      return 0;
+    }
+
+    const elapsed = Math.max(0, nowMs - fillCycleStartedAt);
+    return Math.min(100, ((elapsed % fillDurationMs) / fillDurationMs) * 100);
+  }, [fillCycleStartedAt, fillDurationMs, nowMs]);
+
+  const pulseFlashActive = Boolean(
+    track.tempoFlashEnabled &&
+      pulseEvent &&
+      nowMs - pulseEvent.timestamp < Math.min(220, pulseEvent.intervalMs * 0.45)
+  );
+  const fillFlashActive = Boolean(
+    track.tempoFlashEnabled &&
+      lastFillFlashAt !== null &&
+      nowMs - lastFillFlashAt < 220
+  );
+  const markerActive = pulseFlashActive || fillFlashActive;
 
   return (
-    <div className="rounded-xl border border-border/60 bg-card/80 p-4">
+    <div
+      className={cn(
+        "rounded-xl border border-border/60 bg-card/80 p-4 transition-all duration-300",
+        markerActive &&
+          "border-primary/60 bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.08)]"
+      )}
+    >
       <div className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -633,7 +812,8 @@ function ReceiverTrackCard({
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {track.trackId} · volume {volumeValueToPercent(track.volumeValue)}
-              % · loop {track.loopEnabled ? "on" : "off"}
+              % · loop {track.loopEnabled ? "on" : "off"} · fill{" "}
+              {track.fillTime.toFixed(1)}s
             </p>
           </div>
 
@@ -650,6 +830,34 @@ function ReceiverTrackCard({
             )}
             {track.playing ? "Stop" : "Play"}
           </Button>
+        </div>
+
+        <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "size-2.5 rounded-full transition-all duration-200",
+                  markerActive
+                    ? "bg-primary shadow-[0_0_0_6px_hsl(var(--primary)/0.18)]"
+                    : "bg-muted-foreground/30"
+                )}
+              />
+              <span className="text-sm font-medium">Tempo Marker</span>
+            </div>
+            <Badge variant={track.tempoFlashEnabled ? "secondary" : "outline"}>
+              {track.tempoFlashEnabled ? "Armed" : "Disabled"}
+            </Badge>
+          </div>
+          <Progress value={fillProgress} className="h-2.5" />
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>
+              {pulseEvent
+                ? `${pulseEvent.bpm} BPM · beat ${pulseEvent.sequence + 1}`
+                : "Waiting for server pulse"}
+            </span>
+            <span>{track.fillTime.toFixed(1)}s fill</span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

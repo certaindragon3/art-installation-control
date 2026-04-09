@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import {
+  type PulseEvent,
   type ReceiverListUpdate,
   type ReceiverState,
   type UnifiedCommand,
@@ -18,6 +19,7 @@ interface UseSocketReturn {
   connected: boolean;
   receivers: ReceiverState[];
   receiverState: ReceiverState | null;
+  pulseEvent: PulseEvent | null;
   sendCommand: (command: UnifiedCommand) => void;
   postInteraction: (event: UnityInteractionEvent) => void;
   clearOfflineReceivers: () => void;
@@ -29,7 +31,10 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
   const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [receivers, setReceivers] = useState<ReceiverState[]>([]);
-  const [receiverState, setReceiverState] = useState<ReceiverState | null>(null);
+  const [receiverState, setReceiverState] = useState<ReceiverState | null>(
+    null
+  );
+  const [pulseEvent, setPulseEvent] = useState<PulseEvent | null>(null);
 
   useEffect(() => {
     const socket = io({
@@ -65,6 +70,7 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
 
     socket.on(WS_EVENTS.DISCONNECT, () => {
       setConnected(false);
+      setPulseEvent(null);
     });
 
     if (role === "controller") {
@@ -76,6 +82,9 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     if (role === "receiver") {
       socket.on(WS_EVENTS.RECEIVER_STATE_UPDATE, (state: ReceiverState) => {
         setReceiverState(state);
+      });
+      socket.on(WS_EVENTS.PULSE, (event: PulseEvent) => {
+        setPulseEvent(event);
       });
     }
 
@@ -121,6 +130,7 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     connected,
     receivers,
     receiverState,
+    pulseEvent,
     sendCommand,
     postInteraction,
     clearOfflineReceivers,

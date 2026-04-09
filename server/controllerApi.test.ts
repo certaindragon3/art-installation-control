@@ -8,6 +8,7 @@ import {
   AUDIO_URLS,
   CONFIG_TTL_MS,
   DEFAULT_ICON_COLOR,
+  type PulseEvent,
   WS_EVENTS,
 } from "../shared/wsTypes";
 
@@ -725,6 +726,215 @@ describe("controller HTTP API", () => {
         ]),
       },
     });
+  });
+
+  it("emits phase 3 pulse events, supports BPM changes, and stops cleanly", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Main Screen",
+    });
+    await initialStatePromise;
+
+    const pulses: PulseEvent[] = [];
+    receiver.on(WS_EVENTS.PULSE, (event: PulseEvent) => {
+      pulses.push(event);
+    });
+
+    const pulseStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        pulse: {
+          active: boolean;
+          enabled: boolean;
+          visible: boolean;
+          bpm: number;
+        };
+        tracks: Array<{
+          trackId: string;
+          tempoFlashEnabled: boolean;
+          fillTime: number;
+        }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const pulseResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "pulse",
+          patch: {
+            active: true,
+            enabled: true,
+            visible: true,
+            bpm: 600,
+          },
+        },
+      }),
+    });
+
+    expect(pulseResponse.status).toBe(200);
+    expect(await pulseStatePromise).toMatchObject({
+      configVersion: 2,
+      config: {
+        pulse: {
+          active: true,
+          enabled: true,
+          visible: true,
+          bpm: 600,
+        },
+      },
+    });
+
+    await waitFor(async () => pulses.length >= 2, 1500);
+    const firstInterval = pulses[1]!.timestamp - pulses[0]!.timestamp;
+    expect(firstInterval).toBeGreaterThanOrEqual(70);
+    expect(firstInterval).toBeLessThanOrEqual(180);
+
+    const bpmChangeStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        pulse: { active: boolean; enabled: boolean; bpm: number };
+        tracks: Array<{
+          trackId: string;
+          tempoFlashEnabled: boolean;
+          fillTime: number;
+        }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const bpmChangeResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_track_state",
+        targetId: "screen-a",
+        payload: {
+          trackId: "track_01",
+          patch: {
+            tempoFlashEnabled: true,
+            fillTime: 1.5,
+          },
+        },
+      }),
+    });
+
+    expect(bpmChangeResponse.status).toBe(200);
+    expect(await bpmChangeStatePromise).toMatchObject({
+      configVersion: 3,
+      config: {
+        tracks: expect.arrayContaining([
+          expect.objectContaining({
+            trackId: "track_01",
+            tempoFlashEnabled: true,
+            fillTime: 1.5,
+          }),
+        ]),
+      },
+    });
+
+    const updatePulseStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        pulse: { active: boolean; enabled: boolean; bpm: number };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const updatePulseResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_module_state",
+          targetId: "screen-a",
+          payload: {
+            module: "pulse",
+            patch: {
+              active: true,
+              enabled: true,
+              bpm: 300,
+            },
+          },
+        }),
+      }
+    );
+
+    expect(updatePulseResponse.status).toBe(200);
+    expect(await updatePulseStatePromise).toMatchObject({
+      configVersion: 4,
+      config: {
+        pulse: {
+          active: true,
+          enabled: true,
+          bpm: 300,
+        },
+      },
+    });
+
+    const pulsesBeforeChange = pulses.length;
+    await waitFor(async () => pulses.length >= pulsesBeforeChange + 2, 1800);
+    const secondInterval =
+      pulses[pulses.length - 1]!.timestamp -
+      pulses[pulses.length - 2]!.timestamp;
+    expect(secondInterval).toBeGreaterThanOrEqual(160);
+    expect(secondInterval).toBeLessThanOrEqual(320);
+
+    const stopPulseStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        pulse: { active: boolean; enabled: boolean; bpm: number };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const stopPulseResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "pulse",
+          patch: {
+            active: false,
+            enabled: true,
+          },
+        },
+      }),
+    });
+
+    expect(stopPulseResponse.status).toBe(200);
+    expect(await stopPulseStatePromise).toMatchObject({
+      configVersion: 5,
+      config: {
+        pulse: {
+          active: false,
+          enabled: true,
+          bpm: 300,
+        },
+      },
+    });
+
+    const pulseCountAfterStop = pulses.length;
+    await new Promise(resolve => setTimeout(resolve, 350));
+    expect(pulses).toHaveLength(pulseCountAfterStop);
   });
 
   it("broadcasts phase 2 updates and keeps legacy audio_playable semantics", async () => {

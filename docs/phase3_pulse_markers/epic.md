@@ -38,6 +38,7 @@ function startPulse(bpm: number) {
 ### 3.2 Track Markers & Fill State (需求 1.4)
 
 每条 track 展示：
+
 - Tempo-synced 闪烁标记（与 pulse 同步）
 - 可填充 UI 元素（slider/progress 风格），在 `fillTime` 秒内从 0 填充到 1
 - Flash 与 fill 同步：fillable 到达 1 时触发 flash
@@ -46,13 +47,13 @@ function startPulse(bpm: number) {
 
 ## 验收标准
 
-- [ ] Pulse 广播按 BPM 精确运行，累积误差 < 5ms / 分钟
-- [ ] BPM 可动态调整
-- [ ] Pulse 可开关
-- [ ] 每条 track 有闪烁标记，与 pulse 同步
-- [ ] Fill bar 动画在 fillTime 内完成 0→1
-- [ ] Fill 到达 1 时触发 flash
-- [ ] fillTime 可由 Unity/Controller 配置
+- [x] Pulse 广播按 BPM 精确运行，累积误差 < 5ms / 分钟
+- [x] BPM 可动态调整
+- [x] Pulse 可开关
+- [x] 每条 track 有闪烁标记，与 pulse 同步
+- [x] Fill bar 动画在 fillTime 内完成 0→1
+- [x] Fill 到达 1 时触发 flash
+- [x] fillTime 可由 Unity/Controller 配置
 
 ## 测试建议（无 Unity 客户端）
 

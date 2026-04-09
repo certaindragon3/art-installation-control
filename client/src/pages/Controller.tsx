@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ClassroomMap } from "@/components/ClassroomMap";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,20 +42,26 @@ import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import type {
   GroupState,
+  MapConfig,
   ReceiverState,
+  ScoreConfig,
   TrackState,
   UnifiedCommand,
 } from "@shared/wsTypes";
+import { clampNormalizedCoordinate } from "@shared/wsTypes";
 import {
   AudioLines,
   Download,
+  Map as MapIcon,
   Monitor,
   Music,
+  Minus,
   Palette,
   Plus,
   RotateCcw,
   Send,
   SlidersHorizontal,
+  Trophy,
   Trash2,
   Vote,
   Volume2,
@@ -173,6 +180,14 @@ export default function Controller() {
     () => selectedReceiver?.config.pulse ?? null,
     [selectedReceiver]
   );
+  const selectedScore = useMemo(
+    () => selectedReceiver?.config.score ?? null,
+    [selectedReceiver]
+  );
+  const selectedMap = useMemo(
+    () => selectedReceiver?.config.map ?? null,
+    [selectedReceiver]
+  );
   const selectedVote = useMemo(
     () => selectedReceiver?.config.vote ?? null,
     [selectedReceiver]
@@ -275,6 +290,42 @@ export default function Controller() {
         targetId: selectedReceiver.receiverId,
         payload: {
           module: "pulse",
+          patch,
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const patchScore = useCallback(
+    (patch: Partial<ScoreConfig>) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          module: "score",
+          patch,
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const patchMap = useCallback(
+    (patch: Partial<MapConfig>) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          module: "map",
           patch,
         },
       });
@@ -554,6 +605,25 @@ export default function Controller() {
     [dispatchCommand, postDiscreteInteraction, textInput]
   );
 
+  const handleScoreReset = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    dispatchCommand({
+      command: "score_reset",
+      targetId: selectedReceiver.receiverId,
+      payload: {},
+    });
+
+    postDiscreteInteraction({
+      action: "resetScore",
+      element: "score:reset",
+      value: 0,
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [dispatchCommand, postDiscreteInteraction, selectedReceiver]);
+
   const handleResetAllState = useCallback(() => {
     dispatchCommand({
       command: "reset_all_state",
@@ -683,10 +753,11 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 4 Controller
+                Phase 5 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Voting, pulse orchestration, and state-driven receiver control
+                Scoring, spatial map, voting, pulse, and state-driven receiver
+                control
               </p>
             </div>
           </div>
@@ -745,7 +816,7 @@ export default function Controller() {
                       <EmptyTitle>No Receivers Yet</EmptyTitle>
                       <EmptyDescription>
                         Open `/receiver/:id` in another tab to register a
-                        receiver before sending phase 4 commands.
+                        receiver before sending phase 5 commands.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -832,6 +903,481 @@ export default function Controller() {
 
             {selectedReceiver ? (
               <>
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Trophy />
+                      Per-Player Score
+                    </CardTitle>
+                    <CardDescription>
+                      Show or hide the score UI, disable interaction, set any
+                      numeric value, and reset it back to zero.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">Score Visible</p>
+                          <p className="text-xs text-muted-foreground">
+                            Reveals the receiver-side score card.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={selectedScore?.visible ?? false}
+                          onCheckedChange={checked => {
+                            patchScore({
+                              visible: checked,
+                            });
+                            postDiscreteInteraction({
+                              action: "toggleScoreVisible",
+                              element: "score:visible",
+                              value: checked,
+                              receiverId: selectedReceiver.receiverId,
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">Score Enabled</p>
+                          <p className="text-xs text-muted-foreground">
+                            Disabled keeps the value visible but clearly locked.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={selectedScore?.enabled ?? false}
+                          onCheckedChange={checked => {
+                            patchScore({
+                              enabled: checked,
+                            });
+                            postDiscreteInteraction({
+                              action: "toggleScoreEnabled",
+                              element: "score:enabled",
+                              value: checked,
+                              receiverId: selectedReceiver.receiverId,
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+                      <div className="rounded-2xl border border-border/60 bg-muted/25 p-5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant={
+                              selectedScore?.visible ? "default" : "outline"
+                            }
+                          >
+                            {selectedScore?.visible ? "Visible" : "Hidden"}
+                          </Badge>
+                          <Badge
+                            variant={
+                              selectedScore?.enabled ? "secondary" : "outline"
+                            }
+                          >
+                            {selectedScore?.enabled ? "Enabled" : "Disabled"}
+                          </Badge>
+                        </div>
+                        <p className="mt-8 text-sm text-muted-foreground">
+                          Current score
+                        </p>
+                        <p className="mt-2 text-6xl font-semibold tracking-tight">
+                          {selectedScore?.value ?? 0}
+                        </p>
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          HTTP and socket updates stay unified through the same
+                          in-memory receiver state.
+                        </p>
+                      </div>
+
+                      <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                        <Field orientation="responsive">
+                          <FieldLabel htmlFor="score-value">
+                            Score Value
+                          </FieldLabel>
+                          <FieldContent>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                  const nextValue =
+                                    (selectedScore?.value ?? 0) - 1;
+                                  patchScore({ value: nextValue });
+                                  postDiscreteInteraction({
+                                    action: "decrementScore",
+                                    element: "score:step_down",
+                                    value: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                }}
+                              >
+                                <Minus data-icon="inline-start" />
+                                Decrement
+                              </Button>
+                              <Input
+                                id="score-value"
+                                type="number"
+                                step="any"
+                                value={selectedScore?.value ?? 0}
+                                className="max-w-48"
+                                onFocus={() =>
+                                  beginContinuousInteraction({
+                                    element: "score:value",
+                                    startValue: selectedScore?.value ?? 0,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onBlur={() =>
+                                  endContinuousInteraction({
+                                    element: "score:value",
+                                    endValue: selectedScore?.value ?? 0,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onChange={event =>
+                                  patchScore({
+                                    value: Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                  const nextValue =
+                                    (selectedScore?.value ?? 0) + 1;
+                                  patchScore({ value: nextValue });
+                                  postDiscreteInteraction({
+                                    action: "incrementScore",
+                                    element: "score:step_up",
+                                    value: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                }}
+                              >
+                                <Plus data-icon="inline-start" />
+                                Increment
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={handleScoreReset}
+                              >
+                                <RotateCcw data-icon="inline-start" />
+                                Reset
+                              </Button>
+                            </div>
+                            <FieldDescription>
+                              Direct set accepts any finite number. Reset uses a
+                              dedicated `score_reset` command.
+                            </FieldDescription>
+                          </FieldContent>
+                        </Field>
+                      </FieldGroup>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <MapIcon />
+                      Classroom Map
+                    </CardTitle>
+                    <CardDescription>
+                      Drive normalized 2D position from controller or Unity and
+                      preview the resolved classroom location in real time.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium">Map Visible</p>
+                            <p className="text-xs text-muted-foreground">
+                              Shows the classroom map section on the receiver.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={selectedMap?.visible ?? false}
+                            onCheckedChange={checked => {
+                              patchMap({
+                                visible: checked,
+                              });
+                              postDiscreteInteraction({
+                                action: "toggleMapVisible",
+                                element: "map:visible",
+                                value: checked,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium">Map Enabled</p>
+                            <p className="text-xs text-muted-foreground">
+                              Disabled leaves the player marker visible but
+                              indicates a locked state.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={selectedMap?.enabled ?? false}
+                            onCheckedChange={checked => {
+                              patchMap({
+                                enabled: checked,
+                              });
+                              postDiscreteInteraction({
+                                action: "toggleMapEnabled",
+                                element: "map:enabled",
+                                value: checked,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                        <Field orientation="responsive">
+                          <FieldLabel htmlFor="map-x-position">
+                            X Position
+                          </FieldLabel>
+                          <FieldContent>
+                            <div className="flex items-center gap-4">
+                              <Slider
+                                value={[selectedMap?.playerPosX ?? 0.5]}
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                onPointerDownCapture={() =>
+                                  beginContinuousInteraction({
+                                    element: "map:x",
+                                    startValue: selectedMap?.playerPosX ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onValueChange={([value]) =>
+                                  patchMap({
+                                    playerPosX: value ?? 0.5,
+                                  })
+                                }
+                                onValueCommit={([value]) => {
+                                  const nextValue = value ?? 0.5;
+                                  postDiscreteInteraction({
+                                    action: "setMapX",
+                                    element: "map:x",
+                                    value: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                  endContinuousInteraction({
+                                    element: "map:x",
+                                    endValue: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                }}
+                              />
+                              <Input
+                                id="map-x-position"
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                className="w-24"
+                                value={selectedMap?.playerPosX ?? 0.5}
+                                onFocus={() =>
+                                  beginContinuousInteraction({
+                                    element: "map:x_input",
+                                    startValue: selectedMap?.playerPosX ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onBlur={() =>
+                                  endContinuousInteraction({
+                                    element: "map:x_input",
+                                    endValue: selectedMap?.playerPosX ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onChange={event =>
+                                  patchMap({
+                                    playerPosX:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <FieldDescription>
+                              `0` is left wall and `1` is right wall. The server
+                              clamps out-of-range values.
+                            </FieldDescription>
+                          </FieldContent>
+                        </Field>
+
+                        <Field orientation="responsive">
+                          <FieldLabel htmlFor="map-y-position">
+                            Y Position
+                          </FieldLabel>
+                          <FieldContent>
+                            <div className="flex items-center gap-4">
+                              <Slider
+                                value={[selectedMap?.playerPosY ?? 0.5]}
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                onPointerDownCapture={() =>
+                                  beginContinuousInteraction({
+                                    element: "map:y",
+                                    startValue: selectedMap?.playerPosY ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onValueChange={([value]) =>
+                                  patchMap({
+                                    playerPosY: value ?? 0.5,
+                                  })
+                                }
+                                onValueCommit={([value]) => {
+                                  const nextValue = value ?? 0.5;
+                                  postDiscreteInteraction({
+                                    action: "setMapY",
+                                    element: "map:y",
+                                    value: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                  endContinuousInteraction({
+                                    element: "map:y",
+                                    endValue: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                }}
+                              />
+                              <Input
+                                id="map-y-position"
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                className="w-24"
+                                value={selectedMap?.playerPosY ?? 0.5}
+                                onFocus={() =>
+                                  beginContinuousInteraction({
+                                    element: "map:y_input",
+                                    startValue: selectedMap?.playerPosY ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onBlur={() =>
+                                  endContinuousInteraction({
+                                    element: "map:y_input",
+                                    endValue: selectedMap?.playerPosY ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onChange={event =>
+                                  patchMap({
+                                    playerPosY:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <FieldDescription>
+                              `0` is front row and `1` is back row.
+                            </FieldDescription>
+                          </FieldContent>
+                        </Field>
+
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              patchMap({
+                                playerPosX: 0,
+                                playerPosY: 0,
+                              });
+                              postDiscreteInteraction({
+                                action: "setMapPreset",
+                                element: "map:preset",
+                                value: "front_left",
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          >
+                            Front Left
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              patchMap({
+                                playerPosX: 0.5,
+                                playerPosY: 0.5,
+                              });
+                              postDiscreteInteraction({
+                                action: "setMapPreset",
+                                element: "map:preset",
+                                value: "center",
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          >
+                            Center
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              patchMap({
+                                playerPosX: 1,
+                                playerPosY: 1,
+                              });
+                              postDiscreteInteraction({
+                                action: "setMapPreset",
+                                element: "map:preset",
+                                value: "back_right",
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          >
+                            Back Right
+                          </Button>
+                        </div>
+                      </FieldGroup>
+                    </div>
+
+                    <div className="space-y-4">
+                      <ClassroomMap
+                        x={selectedMap?.playerPosX ?? 0.5}
+                        y={selectedMap?.playerPosY ?? 0.5}
+                        disabled={!selectedMap?.enabled}
+                        markerLabel={selectedReceiver.label}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Preview uses the same normalized coordinates the
+                        receiver sees after server-side clamp.
+                        Current:
+                        {" "}
+                        {clampNormalizedCoordinate(
+                          selectedMap?.playerPosX ?? 0.5
+                        ).toFixed(2)}
+                        ,
+                        {" "}
+                        {clampNormalizedCoordinate(
+                          selectedMap?.playerPosY ?? 0.5
+                        ).toFixed(2)}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card>
                   <CardHeader className="pb-3">
                     <CardTitle className="flex items-center gap-2 text-base">
@@ -1519,7 +2065,7 @@ export default function Controller() {
                       <EmptyTitle>Select a Receiver</EmptyTitle>
                       <EmptyDescription>
                         Pick a receiver to inspect its live config snapshot and
-                        drive phase 4 commands.
+                        drive phase 5 commands.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -2068,6 +2614,15 @@ function ReceiverSummaryCard({
       <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
         <span>{receiver.config.tracks.length} tracks</span>
         <span>{receiver.config.groups.length} groups</span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span>Score {receiver.config.score.value}</span>
+        <span>
+          Map {clampNormalizedCoordinate(receiver.config.map.playerPosX).toFixed(2)}
+          ,
+          {" "}
+          {clampNormalizedCoordinate(receiver.config.map.playerPosY).toFixed(2)}
+        </span>
       </div>
       <p className="mt-2 truncate text-xs text-muted-foreground">
         {receiver.config.textDisplay.text || "No active text message"}

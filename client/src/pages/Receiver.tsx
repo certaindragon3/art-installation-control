@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { useParams } from "wouter";
+import { ClassroomMap } from "@/components/ClassroomMap";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +39,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
 import {
+  clampNormalizedCoordinate,
   createDefaultReceiverConfig,
   type PulseEvent,
   type TrackState,
@@ -48,9 +50,11 @@ import {
   CheckCircle2,
   Hexagon,
   Lock,
+  Map as MapIcon,
   MessageSquare,
   Music,
   SlidersHorizontal,
+  Trophy,
   Volume2,
   VolumeX,
   Wifi,
@@ -117,6 +121,10 @@ export default function Receiver() {
   const [selectedTrackByGroup, setSelectedTrackByGroup] = useState<
     Record<string, string>
   >({});
+  const [optimisticVoteSelection, setOptimisticVoteSelection] = useState<{
+    voteId: string;
+    selectedOptionId: string;
+  } | null>(null);
   const [activeVolumeTrackId, setActiveVolumeTrackId] = useState<string | null>(
     null
   );
@@ -128,10 +136,25 @@ export default function Receiver() {
   );
   const iconColor = config.visuals.iconColor;
   const pulseEnabled = config.pulse.enabled && config.pulse.active;
-  const activeVote = useMemo(
-    () => (config.vote?.visible && config.vote.enabled ? config.vote : null),
-    [config.vote]
-  );
+  const scoreVisible = config.score.visible;
+  const mapVisible = config.map.visible;
+  const clampedMapX = clampNormalizedCoordinate(config.map.playerPosX);
+  const clampedMapY = clampNormalizedCoordinate(config.map.playerPosY);
+  const activeVote = useMemo(() => {
+    if (!config.vote?.visible || !config.vote.enabled) {
+      return null;
+    }
+
+    const selectedOptionId =
+      optimisticVoteSelection?.voteId === config.vote.voteId
+        ? optimisticVoteSelection.selectedOptionId
+        : config.vote.selectedOptionId;
+
+    return {
+      ...config.vote,
+      selectedOptionId,
+    };
+  }, [config.vote, optimisticVoteSelection]);
   const voteInteractionLocked = Boolean(activeVote);
 
   const dispatchTrackPatch = useCallback(
@@ -339,6 +362,35 @@ export default function Receiver() {
     }
   }, [activeVolumeTrackId, config.tracks]);
 
+  useEffect(() => {
+    if (!config.vote?.visible || !config.vote.enabled) {
+      setOptimisticVoteSelection(null);
+      return;
+    }
+
+    const vote = config.vote;
+
+    setOptimisticVoteSelection(current => {
+      if (!current || current.voteId !== vote.voteId) {
+        return vote.selectedOptionId
+          ? {
+              voteId: vote.voteId,
+              selectedOptionId: vote.selectedOptionId,
+            }
+          : null;
+      }
+
+      if (vote.selectedOptionId && vote.selectedOptionId !== current.selectedOptionId) {
+        return {
+          voteId: vote.voteId,
+          selectedOptionId: vote.selectedOptionId,
+        };
+      }
+
+      return current;
+    });
+  }, [config.vote]);
+
   const handlePlayToggle = useCallback(
     (track: TrackState) => {
       const nextPlaying = !track.playing;
@@ -429,6 +481,10 @@ export default function Receiver() {
         return;
       }
 
+      setOptimisticVoteSelection({
+        voteId: activeVote.voteId,
+        selectedOptionId: optionId,
+      });
       submitVote({
         voteId: activeVote.voteId,
         selectedOptionId: optionId,
@@ -460,7 +516,7 @@ export default function Receiver() {
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                Phase 4 vote-aware interaction surface
+                Phase 5 score-, map-, and vote-aware interaction surface
               </p>
             </div>
           </div>
@@ -526,7 +582,7 @@ export default function Receiver() {
                 <CardDescription>
                   Other receiver interactions stay paused until this vote closes.
                   {activeVote.allowRevote
-                    ? " You can revise your choice before the timer ends."
+                    ? " Your current choice stays visible, and you can tap another option to revise it before the timer ends."
                     : " Your first choice is final for this round."}
                 </CardDescription>
               </CardHeader>
@@ -575,6 +631,12 @@ export default function Receiver() {
                   ) : (
                     <p>Select one option to submit your vote.</p>
                   )}
+                  {activeVote.allowRevote && activeVote.selectedOptionId ? (
+                    <p className="mt-2 text-xs">
+                      Tap another option at any time before the vote closes to
+                      change your answer.
+                    </p>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>
@@ -587,6 +649,77 @@ export default function Receiver() {
             )}
             aria-hidden={voteInteractionLocked}
           >
+            {scoreVisible ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Trophy />
+                    Score
+                  </CardTitle>
+                  <CardDescription>
+                    Per-player scoring remains state-driven so controller and
+                    Unity see the same value.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="rounded-[1.75rem] border border-border/60 bg-muted/25 p-6 text-center">
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <Badge
+                        variant={config.score.enabled ? "secondary" : "outline"}
+                      >
+                        {config.score.enabled ? "Enabled" : "Disabled"}
+                      </Badge>
+                      <Badge variant="outline">
+                        Receiver {receiverId}
+                      </Badge>
+                    </div>
+                    <p className="mt-6 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+                      Current Score
+                    </p>
+                    <p className="mt-3 text-7xl font-semibold tracking-tight">
+                      {config.score.value}
+                    </p>
+                    <p className="mt-4 text-sm text-muted-foreground">
+                      {config.score.enabled
+                        ? "Ready for live updates."
+                        : "Score display locked by the controller."}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {mapVisible ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <MapIcon />
+                    Classroom Map
+                  </CardTitle>
+                  <CardDescription>
+                    Normalized coordinates place the receiver inside the shared
+                    classroom space.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ClassroomMap
+                    x={config.map.playerPosX}
+                    y={config.map.playerPosY}
+                    disabled={!config.map.enabled}
+                    markerLabel={`Receiver ${receiverId}`}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={config.map.enabled ? "secondary" : "outline"}>
+                      {config.map.enabled ? "Tracking Enabled" : "Tracking Disabled"}
+                    </Badge>
+                    <Badge variant="outline">
+                      x {clampedMapX.toFixed(2)} · y {clampedMapY.toFixed(2)}
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
             {config.pulse.visible || pulseEnabled ? (
               <Card>
                 <CardHeader className="pb-3">

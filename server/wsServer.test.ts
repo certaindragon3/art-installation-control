@@ -50,6 +50,17 @@ describe("Phase 1 shared protocol", () => {
       bpm: 90,
     });
     expect(config.vote).toBeNull();
+    expect(config.score).toMatchObject({
+      visible: false,
+      enabled: false,
+      value: 0,
+    });
+    expect(config.map).toMatchObject({
+      visible: false,
+      enabled: false,
+      playerPosX: 0.5,
+      playerPosY: 0.5,
+    });
     expect(config.visuals).toMatchObject({
       visible: true,
       enabled: true,

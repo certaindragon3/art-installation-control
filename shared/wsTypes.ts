@@ -219,6 +219,8 @@ export interface SubmitVotePayload {
   selectedOptionId: string;
 }
 
+export interface ScoreResetPayload extends JsonRecord {}
+
 export interface ResetAllStatePayload extends JsonRecord {}
 
 export type UnifiedCommand =
@@ -262,6 +264,12 @@ export type UnifiedCommand =
       command: "vote_reset_all";
       targetId: string;
       payload: VoteResetAllPayload;
+      timestamp: string;
+    }
+  | {
+      command: "score_reset";
+      targetId: string;
+      payload: ScoreResetPayload;
       timestamp: string;
     }
   | {
@@ -344,6 +352,14 @@ export const WS_EVENTS = {
 // ─── Defaults ────────────────────────────────────────────────────────
 export const CONFIG_TTL_MS = 60_000;
 export const DEFAULT_ICON_COLOR = "#6366f1";
+
+export function clampNormalizedCoordinate(value: number, fallback = 0.5) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(1, Math.max(0, value));
+}
 
 export interface TrackDefinition {
   trackId: string;

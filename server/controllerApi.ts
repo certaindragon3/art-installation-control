@@ -26,6 +26,7 @@ const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
   "set_module_state",
   "set_vote_state",
   "vote_reset_all",
+  "score_reset",
   "reset_all_state",
 ]);
 
@@ -350,6 +351,14 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
     case "vote_reset_all": {
       return {
         command: "vote_reset_all",
+        targetId: body.targetId.trim(),
+        payload: {},
+        timestamp,
+      };
+    }
+    case "score_reset": {
+      return {
+        command: "score_reset",
         targetId: body.targetId.trim(),
         payload: {},
         timestamp,

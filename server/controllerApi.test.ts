@@ -937,6 +937,184 @@ describe("controller HTTP API", () => {
     expect(pulses).toHaveLength(pulseCountAfterStop);
   });
 
+  it("supports phase 5 score control, map clamping, and score reset over HTTP and socket", async () => {
+    const receiver = await connectSocket(baseUrl);
+    const controller = await connectSocket(baseUrl);
+    sockets.push(receiver, controller);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Main Screen",
+    });
+    await initialStatePromise;
+
+    controller.emit(WS_EVENTS.REGISTER_CONTROLLER);
+    await new Promise(resolve => setTimeout(resolve, 25));
+
+    const scoreStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        score: {
+          visible: boolean;
+          enabled: boolean;
+          value: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const scoreResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "score",
+          patch: {
+            scoreVisible: true,
+            scoreEnabled: true,
+            scoreValue: 12,
+          },
+        },
+      }),
+    });
+
+    expect(scoreResponse.status).toBe(200);
+    expect(await scoreStatePromise).toMatchObject({
+      configVersion: 2,
+      config: {
+        score: {
+          visible: true,
+          enabled: true,
+          value: 12,
+        },
+      },
+    });
+
+    const mapClampStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        map: {
+          visible: boolean;
+          enabled: boolean;
+          playerPosX: number;
+          playerPosY: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const mapResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "map",
+          patch: {
+            mapVisible: true,
+            enabled: true,
+            x: 1.4,
+            y: -0.25,
+          },
+        },
+      }),
+    });
+
+    expect(mapResponse.status).toBe(200);
+    expect(await mapClampStatePromise).toMatchObject({
+      configVersion: 3,
+      config: {
+        map: {
+          visible: true,
+          enabled: true,
+          playerPosX: 1,
+          playerPosY: 0,
+        },
+      },
+    });
+
+    const mapSocketStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        map: {
+          visible: boolean;
+          enabled: boolean;
+          playerPosX: number;
+          playerPosY: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    controller.emit(WS_EVENTS.CONTROL_MESSAGE, {
+      command: "set_module_state",
+      targetId: "screen-a",
+      payload: {
+        module: "map",
+        patch: {
+          playerPosX: 0.32,
+          playerPosY: 0.74,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(await mapSocketStatePromise).toMatchObject({
+      configVersion: 4,
+      config: {
+        map: {
+          visible: true,
+          enabled: true,
+          playerPosX: 0.32,
+          playerPosY: 0.74,
+        },
+      },
+    });
+
+    const scoreResetStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        score: {
+          visible: boolean;
+          enabled: boolean;
+          value: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const scoreResetResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "score_reset",
+        targetId: "screen-a",
+        payload: {},
+      }),
+    });
+
+    expect(scoreResetResponse.status).toBe(200);
+    expect(await scoreResetStatePromise).toMatchObject({
+      configVersion: 5,
+      config: {
+        score: {
+          visible: true,
+          enabled: true,
+          value: 0,
+        },
+      },
+    });
+  });
+
   it("broadcasts phase 2 updates and keeps legacy audio_playable semantics", async () => {
     const receiverA = await connectSocket(baseUrl);
     const receiverB = await connectSocket(baseUrl);

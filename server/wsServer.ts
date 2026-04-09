@@ -7,6 +7,7 @@ import {
   type PulseScheduler,
 } from "./pulseScheduler";
 import {
+  clampNormalizedCoordinate,
   CONFIG_TTL_MS,
   type ControlInputMessage,
   createDefaultReceiverConfig,
@@ -773,6 +774,83 @@ function assignModulePatch<T extends ModuleName>(
   return true;
 }
 
+function resolveFiniteNumber(
+  primary: unknown,
+  fallbackPrimary: unknown,
+  previousValue: number
+) {
+  if (typeof primary === "number" && Number.isFinite(primary)) {
+    return primary;
+  }
+
+  if (typeof fallbackPrimary === "number" && Number.isFinite(fallbackPrimary)) {
+    return fallbackPrimary;
+  }
+
+  return previousValue;
+}
+
+function assignScorePatch(
+  state: InternalReceiverState,
+  patch: SetModuleStatePayload["patch"]
+) {
+  if (typeof patch.visible === "boolean") {
+    state.config.score.visible = patch.visible;
+  } else if (typeof patch.scoreVisible === "boolean") {
+    state.config.score.visible = patch.scoreVisible;
+  }
+
+  if (typeof patch.enabled === "boolean") {
+    state.config.score.enabled = patch.enabled;
+  } else if (typeof patch.scoreEnabled === "boolean") {
+    state.config.score.enabled = patch.scoreEnabled;
+  }
+
+  state.config.score.value = resolveFiniteNumber(
+    patch.value,
+    patch.scoreValue,
+    state.config.score.value
+  );
+
+  return true;
+}
+
+function assignMapPatch(
+  state: InternalReceiverState,
+  patch: SetModuleStatePayload["patch"]
+) {
+  if (typeof patch.visible === "boolean") {
+    state.config.map.visible = patch.visible;
+  } else if (typeof patch.mapVisible === "boolean") {
+    state.config.map.visible = patch.mapVisible;
+  }
+
+  if (typeof patch.enabled === "boolean") {
+    state.config.map.enabled = patch.enabled;
+  } else if (typeof patch.mapEnabled === "boolean") {
+    state.config.map.enabled = patch.mapEnabled;
+  }
+
+  state.config.map.playerPosX = clampNormalizedCoordinate(
+    resolveFiniteNumber(
+      patch.playerPosX,
+      patch.x,
+      state.config.map.playerPosX
+    ),
+    state.config.map.playerPosX
+  );
+  state.config.map.playerPosY = clampNormalizedCoordinate(
+    resolveFiniteNumber(
+      patch.playerPosY,
+      patch.y,
+      state.config.map.playerPosY
+    ),
+    state.config.map.playerPosY
+  );
+
+  return true;
+}
+
 function assignPulsePatch(
   state: InternalReceiverState,
   patch: SetModuleStatePayload["patch"]
@@ -826,10 +904,10 @@ function applyCommand(
         return assignPulsePatch(state, command.payload.patch);
       }
       if (command.payload.module === "score") {
-        return assignModulePatch(state, "score", command.payload.patch);
+        return assignScorePatch(state, command.payload.patch);
       }
       if (command.payload.module === "map") {
-        return assignModulePatch(state, "map", command.payload.patch);
+        return assignMapPatch(state, command.payload.patch);
       }
       if (command.payload.module === "timing") {
         return assignModulePatch(state, "timing", command.payload.patch);
@@ -839,6 +917,13 @@ function applyCommand(
       return applyVoteState(state, command.payload.vote);
     case "vote_reset_all":
       return resetReceiverVoteSelection(state);
+    case "score_reset":
+      if (state.config.score.value === 0) {
+        return false;
+      }
+
+      state.config.score.value = 0;
+      return true;
     case "reset_all_state":
       state.config = createDefaultReceiverConfig();
       return true;

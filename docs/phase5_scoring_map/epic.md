@@ -42,12 +42,12 @@ interface MapConfig {
 
 ## 验收标准
 
-- [ ] Score 显示/隐藏/启用/禁用正常
-- [ ] Score 可直接设置任意值
-- [ ] Score 重置命令生效
-- [ ] 教室地图 2D 展示
-- [ ] Normalized 坐标 (0-1) 定位准确
-- [ ] Unity 可远程控制 score 和 map position
+- [x] Score 显示/隐藏/启用/禁用正常
+- [x] Score 可直接设置任意值
+- [x] Score 重置命令生效
+- [x] 教室地图 2D 展示
+- [x] Normalized 坐标 (0-1) 定位准确
+- [x] Unity 可远程控制 score 和 map position
 
 ## 测试建议（无 Unity 客户端）
 

@@ -19,14 +19,11 @@ export function ClassroomMap({
 }: ClassroomMapProps) {
   const clampedX = clampNormalizedCoordinate(x);
   const clampedY = clampNormalizedCoordinate(y);
+  const xPercent = clampedX * 100;
+  const yBackToFrontPercent = (1 - clampedY) * 100;
 
   return (
     <div className={cn("space-y-3", className)}>
-      <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-        <span>Front</span>
-        <span>Back</span>
-      </div>
-
       <div className="relative aspect-[4/3] overflow-hidden rounded-[1.5rem] border border-border/60 bg-muted/20">
         <div
           className="absolute inset-0 opacity-60"
@@ -41,6 +38,11 @@ export function ClassroomMap({
         <div className="absolute inset-x-6 top-5 flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
           <span>Left</span>
           <span>Right</span>
+        </div>
+
+        <div className="absolute inset-y-6 right-3 flex flex-col items-center justify-between text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          <span>Front</span>
+          <span>Back</span>
         </div>
 
         <div
@@ -72,8 +74,8 @@ export function ClassroomMap({
       </div>
 
       <div className="flex items-center justify-between rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
-        <span>X {clampedX.toFixed(2)}</span>
-        <span>Y {clampedY.toFixed(2)}</span>
+        <span>Left → Right {xPercent.toFixed(0)}</span>
+        <span>Back → Front {yBackToFrontPercent.toFixed(0)}</span>
       </div>
     </div>
   );

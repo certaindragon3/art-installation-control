@@ -39,12 +39,12 @@ interface TimingEvent {
 
 ## 验收标准
 
-- [ ] Loading bar 红绿红渐变动画正确
-- [ ] 中心指示器清晰可见
-- [ ] 按压结果实时发送到 Unity
-- [ ] tolerance 可配置
-- [ ] 结果可导出为 JSON
-- [ ] 与 pulse（Phase 3）同步
+- [x] Loading bar 红绿红渐变动画正确
+- [x] 中心指示器清晰可见
+- [x] 按压结果实时发送到 Unity
+- [x] tolerance 可配置
+- [x] 结果可导出为 JSON
+- [x] 与 pulse（Phase 3）同步
 
 ## 测试建议（无 Unity 客户端）
 

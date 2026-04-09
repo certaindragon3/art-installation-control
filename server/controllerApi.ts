@@ -15,6 +15,7 @@ import {
   dispatchControlMessage,
   getConfigSnapshot,
   getReceiverList,
+  getTimingExport,
   getVoteExports,
 } from "./wsServer";
 
@@ -438,6 +439,13 @@ export function registerControllerApi(app: Express) {
     res.status(200).json({
       ok: true,
       votes: getVoteExports(),
+    });
+  });
+
+  app.get("/api/controller/timing/export", (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      timing: getTimingExport(),
     });
   });
 

@@ -41,7 +41,9 @@ import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
 import {
   clampNormalizedCoordinate,
   createDefaultReceiverConfig,
+  evaluateTimingPress,
   type PulseEvent,
+  type TimingInteractionValue,
   type TrackState,
   type VoteOption,
 } from "@shared/wsTypes";
@@ -54,6 +56,7 @@ import {
   MessageSquare,
   Music,
   SlidersHorizontal,
+  Target,
   Trophy,
   Volume2,
   VolumeX,
@@ -89,6 +92,10 @@ function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
 
   audio.pause();
 }
+
+type ReceiverTimingResult = TimingInteractionValue & {
+  isoTimestamp: string;
+};
 
 export default function Receiver() {
   const params = useParams<{ id: string }>();
@@ -129,6 +136,8 @@ export default function Receiver() {
     null
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [lastTimingResult, setLastTimingResult] =
+    useState<ReceiverTimingResult | null>(null);
 
   const config = useMemo(
     () => receiverState?.config ?? createDefaultReceiverConfig(),
@@ -156,6 +165,35 @@ export default function Receiver() {
     };
   }, [config.vote, optimisticVoteSelection]);
   const voteInteractionLocked = Boolean(activeVote);
+  const timingVisible = config.timing.visible;
+  const timingStatus = useMemo(
+    () =>
+      evaluateTimingPress({
+        timingValue: config.timing.timingValue,
+        targetCenter: config.timing.targetCenter,
+        timingTolerance: config.timing.timingTolerance,
+        pulseEnabled,
+        pulseEvent,
+        nowMs,
+      }),
+    [
+      config.timing.targetCenter,
+      config.timing.timingTolerance,
+      config.timing.timingValue,
+      nowMs,
+      pulseEnabled,
+      pulseEvent,
+    ]
+  );
+  const timingWindowStart = Math.max(
+    0,
+    timingStatus.targetCenter - timingStatus.timingTolerance
+  );
+  const timingWindowEnd = Math.min(
+    1,
+    timingStatus.targetCenter + timingStatus.timingTolerance
+  );
+  const timingWindowWidth = Math.max(0, timingWindowEnd - timingWindowStart);
 
   const dispatchTrackPatch = useCallback(
     (trackId: string, patch: Partial<TrackState>) => {
@@ -502,6 +540,36 @@ export default function Receiver() {
     [activeVote, postDiscreteInteraction, submitVote]
   );
 
+  const handleTimingPress = useCallback(() => {
+    const evaluation = evaluateTimingPress({
+      timingValue: config.timing.timingValue,
+      targetCenter: config.timing.targetCenter,
+      timingTolerance: config.timing.timingTolerance,
+      pulseEnabled,
+      pulseEvent,
+      nowMs: Date.now(),
+    });
+
+    const isoTimestamp = new Date().toISOString();
+    setLastTimingResult({
+      ...evaluation,
+      isoTimestamp,
+    });
+    postDiscreteInteraction({
+      action: "submitTiming",
+      element: "receiver:timing_button",
+      value: evaluation,
+    });
+  }, [
+    config.timing.targetCenter,
+    config.timing.timingTolerance,
+    config.timing.timingValue,
+    nowMs,
+    postDiscreteInteraction,
+    pulseEnabled,
+    pulseEvent,
+  ]);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border/60 bg-card/85 backdrop-blur">
@@ -516,7 +584,8 @@ export default function Receiver() {
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                Phase 5 score-, map-, and vote-aware interaction surface
+                Phase 6 score-, map-, vote-, and timing-aware interaction
+                surface
               </p>
             </div>
           </div>
@@ -649,6 +718,145 @@ export default function Receiver() {
             )}
             aria-hidden={voteInteractionLocked}
           >
+            {timingVisible ? (
+              <Card className="border-primary/20 bg-card/95 shadow-[0_20px_70px_hsl(var(--primary)/0.08)]">
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant={
+                        config.timing.enabled ? "default" : "outline"
+                      }
+                    >
+                      {config.timing.enabled ? "Active" : "Locked"}
+                    </Badge>
+                    <Badge
+                      variant={timingStatus.pulseActive ? "secondary" : "outline"}
+                    >
+                      {timingStatus.pulseActive ? "Pulse Synced" : "Pulse Idle"}
+                    </Badge>
+                    <Badge variant="outline">
+                      Target {timingStatus.targetCenter.toFixed(2)}
+                    </Badge>
+                    <Badge variant="outline">
+                      ±{timingStatus.timingTolerance.toFixed(2)}
+                    </Badge>
+                  </div>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Target />
+                    Timing Challenge
+                  </CardTitle>
+                  <CardDescription>
+                    Tap when the moving marker crosses the bright center line.
+                    Hits and misses are forwarded to Unity in real time and
+                    recorded for JSON export.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="rounded-[1.5rem] border border-border/60 bg-muted/20 p-5">
+                    <div className="relative h-8 overflow-hidden rounded-full bg-muted">
+                      <div className="absolute inset-0 bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_22%,#22c55e_50%,#f59e0b_78%,#ef4444_100%)]" />
+                      <div
+                        className="absolute inset-y-0 right-0 bg-background/85 transition-[width] duration-75"
+                        style={{
+                          width: `${Math.max(
+                            0,
+                            (1 - timingStatus.timingValue) * 100
+                          )}%`,
+                        }}
+                      />
+                      <div
+                        className="absolute inset-y-0 rounded-full bg-white/20"
+                        style={{
+                          left: `${timingWindowStart * 100}%`,
+                          width: `${timingWindowWidth * 100}%`,
+                        }}
+                      />
+                      <div
+                        className="absolute inset-y-[-6px] w-1 rounded-full bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.7),0_0_16px_rgba(255,255,255,0.45)]"
+                        style={{
+                          left: `calc(${timingStatus.targetCenter * 100}% - 2px)`,
+                        }}
+                      />
+                      <div
+                        className={cn(
+                          "absolute inset-y-[-2px] w-4 -translate-x-1/2 rounded-full border border-background/70 bg-background shadow-[0_0_18px_rgba(255,255,255,0.35)] transition-[left] duration-75",
+                          lastTimingResult?.timing &&
+                            "border-emerald-200 bg-emerald-100",
+                          lastTimingResult &&
+                            !lastTimingResult.timing &&
+                            "border-rose-200 bg-rose-100"
+                        )}
+                        style={{
+                          left: `${timingStatus.timingValue * 100}%`,
+                        }}
+                      />
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span>
+                        Progress {timingStatus.timingValue.toFixed(3)}
+                      </span>
+                      <span>
+                        Delta {timingStatus.delta.toFixed(3)}
+                      </span>
+                      <span>
+                        {timingStatus.pulseActive
+                          ? `Pulse #${timingStatus.pulseSequence ?? "--"}`
+                          : "Pulse inactive"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <Button
+                      type="button"
+                      size="lg"
+                      className={cn(
+                        "min-w-48 rounded-2xl",
+                        lastTimingResult?.timing &&
+                          "bg-emerald-600 hover:bg-emerald-600/90",
+                        lastTimingResult &&
+                          !lastTimingResult.timing &&
+                          "bg-rose-600 hover:bg-rose-600/90"
+                      )}
+                      disabled={!config.timing.enabled}
+                      onClick={handleTimingPress}
+                    >
+                      {config.timing.enabled ? "Press On Beat" : "Timing Locked"}
+                    </Button>
+
+                    <div className="rounded-2xl border border-border/60 bg-background/80 px-4 py-3 text-sm">
+                      {lastTimingResult ? (
+                        <>
+                          <p className="font-medium">
+                            {lastTimingResult.timing ? "Hit" : "Miss"} at{" "}
+                            {new Date(lastTimingResult.isoTimestamp).toLocaleTimeString()}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            value {lastTimingResult.timingValue.toFixed(3)} ·
+                            delta {lastTimingResult.delta.toFixed(3)}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-muted-foreground">
+                          No attempts yet. Wait for the marker to cross the
+                          center line, then tap once.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {!timingStatus.pulseActive ? (
+                    <p className="text-xs text-muted-foreground">
+                      Pulse is currently inactive. Presses still log and export,
+                      but they resolve against the fallback `timingValue` rather
+                      than a live moving bar.
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
+            ) : null}
+
             {scoreVisible ? (
               <Card>
                 <CardHeader className="pb-3">
@@ -713,7 +921,9 @@ export default function Receiver() {
                       {config.map.enabled ? "Tracking Enabled" : "Tracking Disabled"}
                     </Badge>
                     <Badge variant="outline">
-                      x {clampedMapX.toFixed(2)} · y {clampedMapY.toFixed(2)}
+                      Left→Right {(clampedMapX * 100).toFixed(1)} · Back→Front
+                      {" "}
+                      {((1 - clampedMapY) * 100).toFixed(1)}
                     </Badge>
                   </div>
                 </CardContent>

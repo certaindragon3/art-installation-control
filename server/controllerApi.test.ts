@@ -1396,6 +1396,176 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("records timing attempts, forwards them to Unity, and exports JSON", async () => {
+    const receiver = await connectSocket(baseUrl);
+    const unity = await connectSocket(baseUrl);
+    sockets.push(receiver, unity);
+
+    unity.emit(WS_EVENTS.REGISTER_UNITY);
+
+    const receiverStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Screen A",
+    });
+    await receiverStatePromise;
+
+    const timingStatePromise = waitForEvent<{
+      config: {
+        timing: {
+          visible: boolean;
+          enabled: boolean;
+          timingValue: number;
+          targetCenter: number;
+          timingTolerance: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const timingResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "timing",
+          patch: {
+            timingVisible: true,
+            timingEnabled: true,
+            timingValue: 0.12,
+            targetCenter: 0.55,
+            tosingTolerance: 0.06,
+          },
+        },
+      }),
+    });
+
+    expect(timingResponse.status).toBe(200);
+    expect(await timingStatePromise).toMatchObject({
+      config: {
+        timing: {
+          visible: true,
+          enabled: true,
+          timingValue: 0.12,
+          targetCenter: 0.55,
+          timingTolerance: 0.06,
+        },
+      },
+    });
+
+    const hitEventPromise = waitForEvent<{
+      sourceRole: string;
+      receiverId: string | null;
+      action: string;
+      element: string;
+      value: { timing: boolean; timingValue: number; pulseActive: boolean };
+    }>(unity, WS_EVENTS.INTERACTION_EVENT);
+
+    receiver.emit(WS_EVENTS.INTERACTION_EVENT, {
+      sourceRole: "receiver",
+      receiverId: null,
+      action: "submitTiming",
+      element: "receiver:timing_button",
+      value: {
+        timing: true,
+        timingValue: 0.56,
+        targetCenter: 0.55,
+        timingTolerance: 0.06,
+        delta: 0.01,
+        pulseSequence: 4,
+        pulseIntervalMs: 1_000,
+        pulseActive: true,
+      },
+      timestamp: "2026-04-09T12:00:00.000Z",
+    });
+
+    expect(await hitEventPromise).toMatchObject({
+      sourceRole: "receiver",
+      receiverId: "screen-a",
+      action: "submitTiming",
+      element: "receiver:timing_button",
+      value: {
+        timing: true,
+        timingValue: 0.56,
+        pulseActive: true,
+      },
+    });
+
+    const missEventPromise = waitForEvent<{
+      sourceRole: string;
+      receiverId: string | null;
+      action: string;
+      element: string;
+      value: { timing: boolean; pulseActive: boolean };
+    }>(unity, WS_EVENTS.INTERACTION_EVENT);
+
+    receiver.emit(WS_EVENTS.INTERACTION_EVENT, {
+      sourceRole: "receiver",
+      receiverId: null,
+      action: "submitTiming",
+      element: "receiver:timing_button",
+      value: {
+        timing: false,
+        timingValue: 0.18,
+        targetCenter: 0.55,
+        timingTolerance: 0.06,
+        delta: 0.37,
+        pulseSequence: null,
+        pulseIntervalMs: null,
+        pulseActive: false,
+      },
+      timestamp: "2026-04-09T12:00:01.000Z",
+    });
+
+    expect(await missEventPromise).toMatchObject({
+      sourceRole: "receiver",
+      receiverId: "screen-a",
+      action: "submitTiming",
+      element: "receiver:timing_button",
+      value: {
+        timing: false,
+        pulseActive: false,
+      },
+    });
+
+    const exportResponse = await fetch(
+      `${baseUrl}/api/controller/timing/export`
+    );
+    const exportBody = await exportResponse.json();
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportBody).toMatchObject({
+      ok: true,
+      timing: {
+        totalAttempts: 2,
+        hits: 1,
+        misses: 1,
+        attempts: [
+          expect.objectContaining({
+            userId: "screen-a",
+            receiverId: "screen-a",
+            label: "Screen A",
+            timing: false,
+            isoTimestamp: "2026-04-09T12:00:01.000Z",
+          }),
+          expect.objectContaining({
+            userId: "screen-a",
+            receiverId: "screen-a",
+            label: "Screen A",
+            timing: true,
+            isoTimestamp: "2026-04-09T12:00:00.000Z",
+          }),
+        ],
+      },
+    });
+  });
+
   it("aggregates vote results, marks missing voters, and exports JSON after timeout", async () => {
     const receiverA = await connectSocket(baseUrl);
     const receiverB = await connectSocket(baseUrl);

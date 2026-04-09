@@ -151,6 +151,9 @@ export interface MapConfig extends VisibilityConfig {
 }
 
 export interface TimingConfig extends VisibilityConfig {
+  timingValue: number;
+  targetCenter: number;
+  timingTolerance: number;
   startedAt: string | null;
   durationMs: number | null;
   remainingMs: number | null;
@@ -315,6 +318,33 @@ export interface PulseEvent {
   timestamp: number;
 }
 
+export interface TimingInteractionValue {
+  timing: boolean;
+  timingValue: number;
+  targetCenter: number;
+  timingTolerance: number;
+  delta: number;
+  pulseSequence: number | null;
+  pulseIntervalMs: number | null;
+  pulseActive: boolean;
+}
+
+export interface TimingEventExport extends TimingInteractionValue {
+  userId: string;
+  receiverId: string;
+  label: string;
+  timestamp: number;
+  isoTimestamp: string;
+}
+
+export interface TimingExport {
+  generatedAt: string;
+  totalAttempts: number;
+  hits: number;
+  misses: number;
+  attempts: TimingEventExport[];
+}
+
 // ─── Unity Interaction Events ────────────────────────────────────────
 export interface UnityInteractionEvent {
   sourceRole: "controller" | "receiver";
@@ -352,6 +382,8 @@ export const WS_EVENTS = {
 // ─── Defaults ────────────────────────────────────────────────────────
 export const CONFIG_TTL_MS = 60_000;
 export const DEFAULT_ICON_COLOR = "#6366f1";
+export const DEFAULT_TIMING_TARGET_CENTER = 0.5;
+export const DEFAULT_TIMING_TOLERANCE = 0.08;
 
 export function clampNormalizedCoordinate(value: number, fallback = 0.5) {
   if (!Number.isFinite(value)) {
@@ -359,6 +391,68 @@ export function clampNormalizedCoordinate(value: number, fallback = 0.5) {
   }
 
   return Math.min(1, Math.max(0, value));
+}
+
+export function clampTimingTolerance(
+  value: number,
+  fallback = DEFAULT_TIMING_TOLERANCE
+) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(0.5, Math.max(0, value));
+}
+
+export function resolveTimingValue(input: {
+  timingValue?: number;
+  pulseEnabled?: boolean;
+  pulseEvent?: Pick<PulseEvent, "intervalMs" | "timestamp"> | null;
+  nowMs?: number;
+}) {
+  const fallbackValue = clampNormalizedCoordinate(input.timingValue ?? 0, 0);
+  if (
+    !input.pulseEnabled ||
+    !input.pulseEvent ||
+    !Number.isFinite(input.nowMs) ||
+    input.pulseEvent.intervalMs <= 0
+  ) {
+    return fallbackValue;
+  }
+
+  const elapsed = Math.max(0, (input.nowMs ?? 0) - input.pulseEvent.timestamp);
+  return clampNormalizedCoordinate(elapsed / input.pulseEvent.intervalMs, 0);
+}
+
+export function evaluateTimingPress(input: {
+  timingValue?: number;
+  targetCenter?: number;
+  timingTolerance?: number;
+  pulseEnabled?: boolean;
+  pulseEvent?: Pick<PulseEvent, "intervalMs" | "sequence" | "timestamp"> | null;
+  nowMs?: number;
+}): TimingInteractionValue {
+  const resolvedTimingValue = resolveTimingValue(input);
+  const resolvedTargetCenter = clampNormalizedCoordinate(
+    input.targetCenter ?? DEFAULT_TIMING_TARGET_CENTER,
+    DEFAULT_TIMING_TARGET_CENTER
+  );
+  const resolvedTolerance = clampTimingTolerance(
+    input.timingTolerance ?? DEFAULT_TIMING_TOLERANCE,
+    DEFAULT_TIMING_TOLERANCE
+  );
+  const delta = Math.abs(resolvedTimingValue - resolvedTargetCenter);
+
+  return {
+    timing: delta <= resolvedTolerance,
+    timingValue: resolvedTimingValue,
+    targetCenter: resolvedTargetCenter,
+    timingTolerance: resolvedTolerance,
+    delta,
+    pulseSequence: input.pulseEvent?.sequence ?? null,
+    pulseIntervalMs: input.pulseEvent?.intervalMs ?? null,
+    pulseActive: Boolean(input.pulseEnabled && input.pulseEvent),
+  };
 }
 
 export interface TrackDefinition {
@@ -432,6 +526,9 @@ export function createDefaultReceiverConfig(): ReceiverConfig {
     timing: {
       visible: false,
       enabled: false,
+      timingValue: 0,
+      targetCenter: DEFAULT_TIMING_TARGET_CENTER,
+      timingTolerance: DEFAULT_TIMING_TOLERANCE,
       startedAt: null,
       durationMs: null,
       remainingMs: null,

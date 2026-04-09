@@ -61,6 +61,13 @@ describe("Phase 1 shared protocol", () => {
       playerPosX: 0.5,
       playerPosY: 0.5,
     });
+    expect(config.timing).toMatchObject({
+      visible: false,
+      enabled: false,
+      timingValue: 0,
+      targetCenter: 0.5,
+      timingTolerance: 0.08,
+    });
     expect(config.visuals).toMatchObject({
       visible: true,
       enabled: true,

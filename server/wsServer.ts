@@ -7,6 +7,7 @@ import {
   type PulseScheduler,
 } from "./pulseScheduler";
 import {
+  clampTimingTolerance,
   clampNormalizedCoordinate,
   CONFIG_TTL_MS,
   type ControlInputMessage,
@@ -22,6 +23,9 @@ import {
   type SetModuleStatePayload,
   type SetTrackStatePayload,
   type SubmitVotePayload,
+  type TimingEventExport,
+  type TimingExport,
+  type TimingInteractionValue,
   type TrackState,
   type UnifiedCommand,
   type UnityInteractionEvent,
@@ -67,6 +71,7 @@ const unities = new Set<string>();
 const pulseLoops = new Map<string, PulseScheduler>();
 const voteSessions = new Map<string, VoteSession>();
 const receiverActiveVotes = new Map<string, string>();
+const timingEvents: TimingEventExport[] = [];
 
 let io: Server | null = null;
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -260,6 +265,64 @@ function emitVoteResults(voteId: string) {
     element: "vote:results",
     value: buildVoteExport(session),
     timestamp: new Date().toISOString(),
+  });
+}
+
+function isTimingInteractionValue(
+  value: unknown
+): value is TimingInteractionValue {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.timing === "boolean" &&
+    typeof candidate.timingValue === "number" &&
+    Number.isFinite(candidate.timingValue) &&
+    typeof candidate.targetCenter === "number" &&
+    Number.isFinite(candidate.targetCenter) &&
+    typeof candidate.timingTolerance === "number" &&
+    Number.isFinite(candidate.timingTolerance) &&
+    typeof candidate.delta === "number" &&
+    Number.isFinite(candidate.delta) &&
+    (candidate.pulseSequence === null ||
+      (typeof candidate.pulseSequence === "number" &&
+        Number.isFinite(candidate.pulseSequence))) &&
+    (candidate.pulseIntervalMs === null ||
+      (typeof candidate.pulseIntervalMs === "number" &&
+        Number.isFinite(candidate.pulseIntervalMs))) &&
+    typeof candidate.pulseActive === "boolean"
+  );
+}
+
+function recordTimingInteraction(receiverId: string, event: UnityInteractionEvent) {
+  if (
+    event.action !== "submitTiming" ||
+    event.element !== "receiver:timing_button" ||
+    !isTimingInteractionValue(event.value)
+  ) {
+    return;
+  }
+
+  const state = receivers.get(receiverId);
+  if (!state) {
+    return;
+  }
+
+  const isoTimestamp =
+    typeof event.timestamp === "string" && event.timestamp.trim()
+      ? event.timestamp
+      : new Date().toISOString();
+  const parsedTimestamp = new Date(isoTimestamp).getTime();
+
+  timingEvents.push({
+    userId: receiverId,
+    receiverId,
+    label: state.label,
+    timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
+    isoTimestamp,
+    ...event.value,
   });
 }
 
@@ -874,6 +937,76 @@ function assignPulsePatch(
   return true;
 }
 
+function assignTimingPatch(
+  state: InternalReceiverState,
+  patch: SetModuleStatePayload["patch"]
+) {
+  if (typeof patch.visible === "boolean") {
+    state.config.timing.visible = patch.visible;
+  } else if (typeof patch.timingVisible === "boolean") {
+    state.config.timing.visible = patch.timingVisible;
+  }
+
+  if (typeof patch.enabled === "boolean") {
+    state.config.timing.enabled = patch.enabled;
+  } else if (typeof patch.timingEnabled === "boolean") {
+    state.config.timing.enabled = patch.timingEnabled;
+  }
+
+  state.config.timing.timingValue = clampNormalizedCoordinate(
+    resolveFiniteNumber(
+      patch.timingValue,
+      undefined,
+      state.config.timing.timingValue
+    ),
+    state.config.timing.timingValue
+  );
+
+  state.config.timing.targetCenter = clampNormalizedCoordinate(
+    resolveFiniteNumber(
+      patch.targetCenter,
+      patch.center,
+      state.config.timing.targetCenter
+    ),
+    state.config.timing.targetCenter
+  );
+
+  state.config.timing.timingTolerance = clampTimingTolerance(
+    resolveFiniteNumber(
+      patch.timingTolerance,
+      patch.tosingTolerance,
+      state.config.timing.timingTolerance
+    ),
+    state.config.timing.timingTolerance
+  );
+
+  if (
+    typeof patch.startedAt === "string" &&
+    patch.startedAt.trim()
+  ) {
+    state.config.timing.startedAt = patch.startedAt;
+  } else if (patch.startedAt === null) {
+    state.config.timing.startedAt = null;
+  }
+
+  if (typeof patch.durationMs === "number" && Number.isFinite(patch.durationMs)) {
+    state.config.timing.durationMs = Math.max(0, patch.durationMs);
+  } else if (patch.durationMs === null) {
+    state.config.timing.durationMs = null;
+  }
+
+  if (
+    typeof patch.remainingMs === "number" &&
+    Number.isFinite(patch.remainingMs)
+  ) {
+    state.config.timing.remainingMs = Math.max(0, patch.remainingMs);
+  } else if (patch.remainingMs === null) {
+    state.config.timing.remainingMs = null;
+  }
+
+  return true;
+}
+
 function stopAllTracks(state: InternalReceiverState) {
   state.config.tracks.forEach(track => {
     track.playing = false;
@@ -910,7 +1043,7 @@ function applyCommand(
         return assignMapPatch(state, command.payload.patch);
       }
       if (command.payload.module === "timing") {
-        return assignModulePatch(state, "timing", command.payload.patch);
+        return assignTimingPatch(state, command.payload.patch);
       }
       return false;
     case "set_vote_state":
@@ -964,6 +1097,19 @@ export function getVoteExports() {
         new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime()
     )
     .map(buildVoteExport);
+}
+
+export function getTimingExport(): TimingExport {
+  const attempts = [...timingEvents].sort((left, right) => right.timestamp - left.timestamp);
+  const hits = attempts.filter(attempt => attempt.timing).length;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalAttempts: attempts.length,
+    hits,
+    misses: attempts.length - hits,
+    attempts,
+  };
 }
 
 function removeDisconnectedReceivers(): string[] {
@@ -1240,6 +1386,10 @@ function forwardInteractionEvent(socket: Socket, event: UnityInteractionEvent) {
         : null
       : (event.receiverId ?? null);
 
+  if (sourceRole === "receiver" && receiverId) {
+    recordTimingInteraction(receiverId, event);
+  }
+
   emitUnityEvent({
     ...event,
     sourceRole,
@@ -1501,6 +1651,7 @@ export async function resetWebSocketState() {
   voteSessions.forEach(session => clearVoteTimeout(session));
   voteSessions.clear();
   receiverActiveVotes.clear();
+  timingEvents.length = 0;
   receivers.clear();
 
   if (cleanupInterval) {

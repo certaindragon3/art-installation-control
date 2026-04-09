@@ -45,6 +45,7 @@ import type {
   MapConfig,
   ReceiverState,
   ScoreConfig,
+  TimingConfig,
   TrackState,
   UnifiedCommand,
 } from "@shared/wsTypes";
@@ -61,6 +62,7 @@ import {
   RotateCcw,
   Send,
   SlidersHorizontal,
+  Target,
   Trophy,
   Trash2,
   Vote,
@@ -85,6 +87,24 @@ const PRESET_COLORS = [
 ];
 
 const UNGROUPED_GROUP_VALUE = "__ungrouped__";
+const MAP_SCALE_MAX = 100;
+const MAP_SCALE_STEP = 0.1;
+
+function mapXNormalizedToScale(value: number) {
+  return clampNormalizedCoordinate(value, 0.5) * MAP_SCALE_MAX;
+}
+
+function mapXScaleToNormalized(value: number) {
+  return clampNormalizedCoordinate(value / MAP_SCALE_MAX, 0.5);
+}
+
+function mapYNormalizedToScale(value: number) {
+  return (1 - clampNormalizedCoordinate(value, 0.5)) * MAP_SCALE_MAX;
+}
+
+function mapYScaleToNormalized(value: number) {
+  return 1 - clampNormalizedCoordinate(value / MAP_SCALE_MAX, 0.5);
+}
 
 function createMachineId(prefix: "track" | "group" | "vote", label: string) {
   const normalized = label
@@ -135,6 +155,7 @@ export default function Controller() {
   const [voteVisibilityDuration, setVoteVisibilityDuration] = useState(15);
   const [voteAllowRevote, setVoteAllowRevote] = useState(false);
   const [exportingVotes, setExportingVotes] = useState(false);
+  const [exportingTiming, setExportingTiming] = useState(false);
 
   useEffect(() => {
     if (selectedReceiverId) {
@@ -186,6 +207,10 @@ export default function Controller() {
   );
   const selectedMap = useMemo(
     () => selectedReceiver?.config.map ?? null,
+    [selectedReceiver]
+  );
+  const selectedTiming = useMemo(
+    () => selectedReceiver?.config.timing ?? null,
     [selectedReceiver]
   );
   const selectedVote = useMemo(
@@ -326,6 +351,24 @@ export default function Controller() {
         targetId: selectedReceiver.receiverId,
         payload: {
           module: "map",
+          patch,
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const patchTiming = useCallback(
+    (patch: Partial<TimingConfig>) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          module: "timing",
           patch,
         },
       });
@@ -743,6 +786,37 @@ export default function Controller() {
     }
   }, [postDiscreteInteraction]);
 
+  const handleTimingExport = useCallback(async () => {
+    setExportingTiming(true);
+
+    try {
+      const response = await fetch("/api/controller/timing/export");
+      if (!response.ok) {
+        throw new Error(`Failed to export timing: ${response.status}`);
+      }
+
+      const body = await response.json();
+      const blob = new Blob([JSON.stringify(body, null, 2)], {
+        type: "application/json",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `phase6-timing-${new Date().toISOString()}.json`;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+
+      postDiscreteInteraction({
+        action: "exportTiming",
+        element: "timing:export_json",
+        value: body.timing?.totalAttempts ?? 0,
+        receiverId: null,
+      });
+    } finally {
+      setExportingTiming(false);
+    }
+  }, [postDiscreteInteraction]);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border/60 bg-card/90 backdrop-blur">
@@ -753,10 +827,10 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 5 Controller
+                Phase 6 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Scoring, spatial map, voting, pulse, and state-driven receiver
+                Scoring, map, voting, pulse, timing, and state-driven receiver
                 control
               </p>
             </div>
@@ -1147,15 +1221,19 @@ export default function Controller() {
                       <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
                         <Field orientation="responsive">
                           <FieldLabel htmlFor="map-x-position">
-                            X Position
+                            X Position (0-100)
                           </FieldLabel>
                           <FieldContent>
                             <div className="flex items-center gap-4">
                               <Slider
-                                value={[selectedMap?.playerPosX ?? 0.5]}
+                                value={[
+                                  mapXNormalizedToScale(
+                                    selectedMap?.playerPosX ?? 0.5
+                                  ),
+                                ]}
                                 min={0}
-                                max={1}
-                                step={0.01}
+                                max={MAP_SCALE_MAX}
+                                step={MAP_SCALE_STEP}
                                 onPointerDownCapture={() =>
                                   beginContinuousInteraction({
                                     element: "map:x",
@@ -1165,11 +1243,15 @@ export default function Controller() {
                                 }
                                 onValueChange={([value]) =>
                                   patchMap({
-                                    playerPosX: value ?? 0.5,
+                                    playerPosX: mapXScaleToNormalized(
+                                      value ?? MAP_SCALE_MAX / 2
+                                    ),
                                   })
                                 }
                                 onValueCommit={([value]) => {
-                                  const nextValue = value ?? 0.5;
+                                  const nextValue = mapXScaleToNormalized(
+                                    value ?? MAP_SCALE_MAX / 2
+                                  );
                                   postDiscreteInteraction({
                                     action: "setMapX",
                                     element: "map:x",
@@ -1187,10 +1269,12 @@ export default function Controller() {
                                 id="map-x-position"
                                 type="number"
                                 min={0}
-                                max={1}
-                                step={0.01}
+                                max={MAP_SCALE_MAX}
+                                step={MAP_SCALE_STEP}
                                 className="w-24"
-                                value={selectedMap?.playerPosX ?? 0.5}
+                                value={mapXNormalizedToScale(
+                                  selectedMap?.playerPosX ?? 0.5
+                                )}
                                 onFocus={() =>
                                   beginContinuousInteraction({
                                     element: "map:x_input",
@@ -1207,30 +1291,35 @@ export default function Controller() {
                                 }
                                 onChange={event =>
                                   patchMap({
-                                    playerPosX:
-                                      Number(event.target.value) || 0,
+                                    playerPosX: mapXScaleToNormalized(
+                                      Number(event.target.value) || 0
+                                    ),
                                   })
                                 }
                               />
                             </div>
                             <FieldDescription>
-                              `0` is left wall and `1` is right wall. The server
-                              clamps out-of-range values.
+                              0 is left wall and 100 is right wall. The server
+                              still clamps using normalized coordinates.
                             </FieldDescription>
                           </FieldContent>
                         </Field>
 
                         <Field orientation="responsive">
                           <FieldLabel htmlFor="map-y-position">
-                            Y Position
+                            Y Position (0-100)
                           </FieldLabel>
                           <FieldContent>
                             <div className="flex items-center gap-4">
                               <Slider
-                                value={[selectedMap?.playerPosY ?? 0.5]}
+                                value={[
+                                  mapYNormalizedToScale(
+                                    selectedMap?.playerPosY ?? 0.5
+                                  ),
+                                ]}
                                 min={0}
-                                max={1}
-                                step={0.01}
+                                max={MAP_SCALE_MAX}
+                                step={MAP_SCALE_STEP}
                                 onPointerDownCapture={() =>
                                   beginContinuousInteraction({
                                     element: "map:y",
@@ -1240,11 +1329,15 @@ export default function Controller() {
                                 }
                                 onValueChange={([value]) =>
                                   patchMap({
-                                    playerPosY: value ?? 0.5,
+                                    playerPosY: mapYScaleToNormalized(
+                                      value ?? MAP_SCALE_MAX / 2
+                                    ),
                                   })
                                 }
                                 onValueCommit={([value]) => {
-                                  const nextValue = value ?? 0.5;
+                                  const nextValue = mapYScaleToNormalized(
+                                    value ?? MAP_SCALE_MAX / 2
+                                  );
                                   postDiscreteInteraction({
                                     action: "setMapY",
                                     element: "map:y",
@@ -1262,10 +1355,12 @@ export default function Controller() {
                                 id="map-y-position"
                                 type="number"
                                 min={0}
-                                max={1}
-                                step={0.01}
+                                max={MAP_SCALE_MAX}
+                                step={MAP_SCALE_STEP}
                                 className="w-24"
-                                value={selectedMap?.playerPosY ?? 0.5}
+                                value={mapYNormalizedToScale(
+                                  selectedMap?.playerPosY ?? 0.5
+                                )}
                                 onFocus={() =>
                                   beginContinuousInteraction({
                                     element: "map:y_input",
@@ -1282,14 +1377,15 @@ export default function Controller() {
                                 }
                                 onChange={event =>
                                   patchMap({
-                                    playerPosY:
-                                      Number(event.target.value) || 0,
+                                    playerPosY: mapYScaleToNormalized(
+                                      Number(event.target.value) || 0
+                                    ),
                                   })
                                 }
                               />
                             </div>
                             <FieldDescription>
-                              `0` is front row and `1` is back row.
+                              0 is back row and 100 is front row.
                             </FieldDescription>
                           </FieldContent>
                         </Field>
@@ -1361,18 +1457,340 @@ export default function Controller() {
                         markerLabel={selectedReceiver.label}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Preview uses the same normalized coordinates the
-                        receiver sees after server-side clamp.
+                        Preview keeps the same internal normalized data while
+                        this panel uses a 0-100 control scale.
                         Current:
                         {" "}
-                        {clampNormalizedCoordinate(
-                          selectedMap?.playerPosX ?? 0.5
-                        ).toFixed(2)}
-                        ,
+                        X {mapXNormalizedToScale(selectedMap?.playerPosX ?? 0.5).toFixed(1)}
                         {" "}
-                        {clampNormalizedCoordinate(
-                          selectedMap?.playerPosY ?? 0.5
-                        ).toFixed(2)}
+                        · Y {mapYNormalizedToScale(selectedMap?.playerPosY ?? 0.5).toFixed(1)}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Target />
+                      Timing Challenge
+                    </CardTitle>
+                    <CardDescription>
+                      Drive a pulse-synced hit window on the receiver, then
+                      export attempt logs as JSON when Unity is unavailable.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium">Timing Visible</p>
+                            <p className="text-xs text-muted-foreground">
+                              Shows the challenge bar and action button on the
+                              receiver.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={selectedTiming?.visible ?? false}
+                            onCheckedChange={checked => {
+                              patchTiming({
+                                visible: checked,
+                              });
+                              postDiscreteInteraction({
+                                action: "toggleTimingVisible",
+                                element: "timing:visible",
+                                value: checked,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium">Timing Enabled</p>
+                            <p className="text-xs text-muted-foreground">
+                              Disabled keeps the bar visible but locks the press
+                              button.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={selectedTiming?.enabled ?? false}
+                            onCheckedChange={checked => {
+                              patchTiming({
+                                enabled: checked,
+                              });
+                              postDiscreteInteraction({
+                                action: "toggleTimingEnabled",
+                                element: "timing:enabled",
+                                value: checked,
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                        <Field orientation="responsive">
+                          <FieldLabel htmlFor="timing-target-center">
+                            Target Center
+                          </FieldLabel>
+                          <FieldContent>
+                            <div className="flex items-center gap-4">
+                              <Slider
+                                value={[selectedTiming?.targetCenter ?? 0.5]}
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                onPointerDownCapture={() =>
+                                  beginContinuousInteraction({
+                                    element: "timing:target_center",
+                                    startValue:
+                                      selectedTiming?.targetCenter ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onValueChange={([value]) =>
+                                  patchTiming({
+                                    targetCenter: value ?? 0.5,
+                                  })
+                                }
+                                onValueCommit={([value]) => {
+                                  const nextValue = value ?? 0.5;
+                                  postDiscreteInteraction({
+                                    action: "setTimingTargetCenter",
+                                    element: "timing:target_center",
+                                    value: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                  endContinuousInteraction({
+                                    element: "timing:target_center",
+                                    endValue: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                }}
+                              />
+                              <Input
+                                id="timing-target-center"
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                className="w-24"
+                                value={selectedTiming?.targetCenter ?? 0.5}
+                                onFocus={() =>
+                                  beginContinuousInteraction({
+                                    element: "timing:target_center_input",
+                                    startValue:
+                                      selectedTiming?.targetCenter ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onBlur={() =>
+                                  endContinuousInteraction({
+                                    element: "timing:target_center_input",
+                                    endValue:
+                                      selectedTiming?.targetCenter ?? 0.5,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onChange={event =>
+                                  patchTiming({
+                                    targetCenter:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <FieldDescription>
+                              `0.5` is the default sweet spot. Shift it to bias
+                              the hit window earlier or later in the pulse.
+                            </FieldDescription>
+                          </FieldContent>
+                        </Field>
+
+                        <Field orientation="responsive">
+                          <FieldLabel htmlFor="timing-tolerance">
+                            Timing Tolerance
+                          </FieldLabel>
+                          <FieldContent>
+                            <div className="flex items-center gap-4">
+                              <Slider
+                                value={[selectedTiming?.timingTolerance ?? 0.08]}
+                                min={0}
+                                max={0.25}
+                                step={0.005}
+                                onPointerDownCapture={() =>
+                                  beginContinuousInteraction({
+                                    element: "timing:tolerance",
+                                    startValue:
+                                      selectedTiming?.timingTolerance ?? 0.08,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onValueChange={([value]) =>
+                                  patchTiming({
+                                    timingTolerance: value ?? 0.08,
+                                  })
+                                }
+                                onValueCommit={([value]) => {
+                                  const nextValue = value ?? 0.08;
+                                  postDiscreteInteraction({
+                                    action: "setTimingTolerance",
+                                    element: "timing:tolerance",
+                                    value: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                  endContinuousInteraction({
+                                    element: "timing:tolerance",
+                                    endValue: nextValue,
+                                    receiverId: selectedReceiver.receiverId,
+                                  });
+                                }}
+                              />
+                              <Input
+                                id="timing-tolerance"
+                                type="number"
+                                min={0}
+                                max={0.5}
+                                step={0.01}
+                                className="w-24"
+                                value={selectedTiming?.timingTolerance ?? 0.08}
+                                onFocus={() =>
+                                  beginContinuousInteraction({
+                                    element: "timing:tolerance_input",
+                                    startValue:
+                                      selectedTiming?.timingTolerance ?? 0.08,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onBlur={() =>
+                                  endContinuousInteraction({
+                                    element: "timing:tolerance_input",
+                                    endValue:
+                                      selectedTiming?.timingTolerance ?? 0.08,
+                                    receiverId: selectedReceiver.receiverId,
+                                  })
+                                }
+                                onChange={event =>
+                                  patchTiming({
+                                    timingTolerance:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <FieldDescription>
+                              Smaller values demand tighter timing. Receiver
+                              presses outside the band count as misses.
+                            </FieldDescription>
+                          </FieldContent>
+                        </Field>
+                      </FieldGroup>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-border/60 bg-muted/25 p-5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant={
+                              selectedTiming?.visible ? "default" : "outline"
+                            }
+                          >
+                            {selectedTiming?.visible ? "Visible" : "Hidden"}
+                          </Badge>
+                          <Badge
+                            variant={
+                              selectedTiming?.enabled ? "secondary" : "outline"
+                            }
+                          >
+                            {selectedTiming?.enabled ? "Enabled" : "Locked"}
+                          </Badge>
+                          <Badge variant="outline">
+                            Target {(selectedTiming?.targetCenter ?? 0.5).toFixed(2)}
+                          </Badge>
+                          <Badge variant="outline">
+                            ±{(selectedTiming?.timingTolerance ?? 0.08).toFixed(2)}
+                          </Badge>
+                        </div>
+
+                        <div className="mt-5 rounded-xl border border-border/60 bg-background/80 p-4">
+                          <div className="relative h-6 overflow-hidden rounded-full bg-muted">
+                            <div className="absolute inset-0 bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_22%,#22c55e_50%,#f59e0b_78%,#ef4444_100%)]" />
+                            <div
+                              className="absolute inset-y-0 rounded-full bg-white/20"
+                              style={{
+                                left: `${Math.max(
+                                  0,
+                                  (selectedTiming?.targetCenter ?? 0.5) -
+                                    (selectedTiming?.timingTolerance ?? 0.08)
+                                ) * 100}%`,
+                                width: `${Math.max(
+                                  0,
+                                  Math.min(
+                                    1,
+                                    (selectedTiming?.targetCenter ?? 0.5) +
+                                      (selectedTiming?.timingTolerance ?? 0.08)
+                                  ) -
+                                    Math.max(
+                                      0,
+                                      (selectedTiming?.targetCenter ?? 0.5) -
+                                        (selectedTiming?.timingTolerance ??
+                                          0.08)
+                                    )
+                                ) * 100}%`,
+                              }}
+                            />
+                            <div
+                              className="absolute inset-y-[-4px] w-1 rounded-full bg-background shadow-[0_0_0_1px_rgba(255,255,255,0.6),0_0_16px_rgba(255,255,255,0.35)]"
+                              style={{
+                                left: `calc(${(selectedTiming?.targetCenter ?? 0.5) * 100}% - 2px)`,
+                              }}
+                            />
+                          </div>
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            Receiver progress fills left to right on every pulse
+                            interval, and the white band marks the valid hit
+                            window.
+                          </p>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              patchTiming({
+                                targetCenter: 0.5,
+                              });
+                              postDiscreteInteraction({
+                                action: "centerTimingTarget",
+                                element: "timing:preset",
+                                value: "center",
+                                receiverId: selectedReceiver.receiverId,
+                              });
+                            }}
+                          >
+                            Center Target
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={handleTimingExport}
+                            disabled={exportingTiming}
+                          >
+                            <Download data-icon="inline-start" />
+                            {exportingTiming ? "Exporting..." : "Export JSON"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-muted-foreground">
+                        Timing mode rides on the receiver pulse stream. Keep
+                        pulse active for a live moving bar; without pulse, taps
+                        still export as misses using the fallback `timingValue`.
                       </p>
                     </div>
                   </CardContent>

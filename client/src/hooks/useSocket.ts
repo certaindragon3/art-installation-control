@@ -4,6 +4,7 @@ import {
   type PulseEvent,
   type ReceiverListUpdate,
   type ReceiverState,
+  type SubmitVotePayload,
   type UnifiedCommand,
   type UnityInteractionEvent,
   WS_EVENTS,
@@ -21,6 +22,7 @@ interface UseSocketReturn {
   receiverState: ReceiverState | null;
   pulseEvent: PulseEvent | null;
   sendCommand: (command: UnifiedCommand) => void;
+  submitVote: (payload: SubmitVotePayload) => void;
   postInteraction: (event: UnityInteractionEvent) => void;
   clearOfflineReceivers: () => void;
   requestReceiverState: () => void;
@@ -110,6 +112,14 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     socketRef.current.emit(WS_EVENTS.INTERACTION_EVENT, event);
   }, []);
 
+  const submitVote = useCallback((payload: SubmitVotePayload) => {
+    if (!socketRef.current?.connected || role !== "receiver") {
+      return;
+    }
+
+    socketRef.current.emit(WS_EVENTS.SUBMIT_VOTE, payload);
+  }, [role]);
+
   const clearOfflineReceivers = useCallback(() => {
     if (!socketRef.current?.connected || role !== "controller") {
       return;
@@ -132,6 +142,7 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     receiverState,
     pulseEvent,
     sendCommand,
+    submitVote,
     postInteraction,
     clearOfflineReceivers,
     requestReceiverState,

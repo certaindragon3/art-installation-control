@@ -41,10 +41,13 @@ import {
   createDefaultReceiverConfig,
   type PulseEvent,
   type TrackState,
+  type VoteOption,
 } from "@shared/wsTypes";
 import {
   AudioLines,
+  CheckCircle2,
   Hexagon,
+  Lock,
   MessageSquare,
   Music,
   SlidersHorizontal,
@@ -92,6 +95,7 @@ export default function Receiver() {
     pulseEvent,
     requestReceiverState,
     sendCommand,
+    submitVote,
     postInteraction,
   } = useSocket({
     role: "receiver",
@@ -124,6 +128,11 @@ export default function Receiver() {
   );
   const iconColor = config.visuals.iconColor;
   const pulseEnabled = config.pulse.enabled && config.pulse.active;
+  const activeVote = useMemo(
+    () => (config.vote?.visible && config.vote.enabled ? config.vote : null),
+    [config.vote]
+  );
+  const voteInteractionLocked = Boolean(activeVote);
 
   const dispatchTrackPatch = useCallback(
     (trackId: string, patch: Partial<TrackState>) => {
@@ -410,6 +419,33 @@ export default function Receiver() {
     [postDiscreteInteraction]
   );
 
+  const handleVoteSelection = useCallback(
+    (optionId: string) => {
+      if (!activeVote) {
+        return;
+      }
+
+      if (!activeVote.allowRevote && activeVote.selectedOptionId !== null) {
+        return;
+      }
+
+      submitVote({
+        voteId: activeVote.voteId,
+        selectedOptionId: optionId,
+      });
+      postDiscreteInteraction({
+        action:
+          activeVote.selectedOptionId === null ? "submitVote" : "revoteVote",
+        element: "receiver:vote_button",
+        value: {
+          voteId: activeVote.voteId,
+          selectedOptionId: optionId,
+        },
+      });
+    },
+    [activeVote, postDiscreteInteraction, submitVote]
+  );
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border/60 bg-card/85 backdrop-blur">
@@ -424,7 +460,7 @@ export default function Receiver() {
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                Phase 3 pulse-synced interaction surface
+                Phase 4 vote-aware interaction surface
               </p>
             </div>
           </div>
@@ -464,207 +500,301 @@ export default function Receiver() {
             </p>
           </section>
 
-          {config.pulse.visible || pulseEnabled ? (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Zap />
-                  Pulse Sync
-                </CardTitle>
-                <CardDescription>
-                  Server-side beat messages keep every receiver aligned to one
-                  clock.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
+          {activeVote ? (
+            <Card className="border-primary/35 bg-primary/5 shadow-[0_24px_80px_hsl(var(--primary)/0.12)]">
+              <CardHeader className="pb-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={pulseEnabled ? "default" : "secondary"}>
-                    {pulseEnabled ? "Pulse Live" : "Pulse Idle"}
+                  <Badge className="gap-1.5">
+                    <Lock className="size-3.5" />
+                    Vote In Progress
                   </Badge>
-                  <Badge variant="outline">{config.pulse.bpm} BPM</Badge>
-                  {pulseEvent ? (
-                    <Badge variant="outline">
-                      Beat #{pulseEvent.sequence + 1}
-                    </Badge>
-                  ) : null}
+                  <Badge variant="outline">
+                    {activeVote.options.length} option
+                    {activeVote.options.length === 1 ? "" : "s"}
+                  </Badge>
+                  <Badge
+                    variant={
+                      activeVote.selectedOptionId ? "secondary" : "outline"
+                    }
+                  >
+                    {activeVote.selectedOptionId ? "Vote Submitted" : "Waiting"}
+                  </Badge>
                 </div>
-                <div className="rounded-2xl border border-border/60 bg-muted/30 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>Beat Phase</span>
-                    <span>
-                      {pulseEnabled && pulseEvent
-                        ? `${Math.round(pulsePhase)}%`
-                        : "Waiting"}
-                    </span>
-                  </div>
-                  <Progress value={pulsePhase} className="h-3" />
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {visibleGroups.length > 0 ? (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Music />
-                  Sample Groups
+                <CardTitle className="text-xl leading-tight">
+                  {activeVote.question}
                 </CardTitle>
                 <CardDescription>
-                  Group dropdowns stay dynamic while track markers continue to
-                  sync to the shared beat.
+                  Other receiver interactions stay paused until this vote closes.
+                  {activeVote.allowRevote
+                    ? " You can revise your choice before the timer ends."
+                    : " Your first choice is final for this round."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {visibleGroups.map(group => {
-                  const tracks = groupTrackMap[group.groupId] ?? [];
-                  const selectedTrackId = selectedTrackByGroup[group.groupId];
-                  const selectedTrack =
-                    tracks.find(track => track.trackId === selectedTrackId) ??
-                    tracks[0];
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {activeVote.options.map(option => {
+                    const selected = activeVote.selectedOptionId === option.id;
+                    const locked =
+                      !activeVote.allowRevote &&
+                      activeVote.selectedOptionId !== null;
 
-                  if (!selectedTrack) {
-                    return null;
-                  }
+                    return (
+                      <Button
+                        key={option.id}
+                        type="button"
+                        variant={selected ? "default" : "outline"}
+                        className={cn(
+                          "h-auto min-h-20 justify-start rounded-2xl px-4 py-4 text-left text-base whitespace-normal",
+                          selected &&
+                            "shadow-[0_0_0_1px_hsl(var(--primary)/0.15)]"
+                        )}
+                        disabled={locked}
+                        onClick={() => handleVoteSelection(option.id)}
+                      >
+                        <span className="flex w-full items-start justify-between gap-3">
+                          <span>{option.label}</span>
+                          {selected ? (
+                            <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
+                          ) : null}
+                        </span>
+                      </Button>
+                    );
+                  })}
+                </div>
 
-                  return (
-                    <div
-                      key={group.groupId}
-                      className={cn(
-                        "rounded-2xl border p-4 transition-colors",
-                        group.enabled ? "bg-muted/30" : "bg-muted/15 opacity-70"
-                      )}
-                      style={{ borderColor: `${group.color}55` }}
-                    >
-                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span
-                              className="size-2.5 rounded-full"
-                              style={{ backgroundColor: group.color }}
-                            />
-                            <span className="font-medium">{group.label}</span>
-                            <Badge
-                              variant={group.enabled ? "secondary" : "outline"}
-                            >
-                              {group.enabled ? "Enabled" : "Locked"}
-                            </Badge>
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {tracks.length} track option
-                            {tracks.length === 1 ? "" : "s"}
-                          </p>
-                        </div>
-
-                        <div className="w-full md:max-w-xs">
-                          <Label className="sr-only">Choose track</Label>
-                          <Select
-                            value={selectedTrack.trackId}
-                            onValueChange={value =>
-                              handleGroupSelection(group.groupId, value)
-                            }
-                            disabled={!group.enabled}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Choose a track" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {tracks.map(track => (
-                                  <SelectItem
-                                    key={track.trackId}
-                                    value={track.trackId}
-                                  >
-                                    {track.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-
-                      <Separator className="my-4" />
-
-                      <ReceiverTrackCard
-                        track={selectedTrack}
-                        disabled={!group.enabled}
-                        activeVolumeTrackId={activeVolumeTrackId}
-                        onPlayToggle={handlePlayToggle}
-                        onLoopToggle={handleLoopToggle}
-                        onVolumeChange={handleVolumeChange}
-                        onVolumeDismiss={handleVolumeDismiss}
-                        onVolumeOpen={trackId =>
-                          setActiveVolumeTrackId(trackId)
-                        }
-                        nowMs={nowMs}
-                        pulseEvent={pulseEvent}
-                        beginContinuousInteraction={beginContinuousInteraction}
-                        endContinuousInteraction={endContinuousInteraction}
-                      />
-                    </div>
-                  );
-                })}
+                <div className="rounded-2xl border border-border/60 bg-background/80 px-4 py-3 text-sm text-muted-foreground">
+                  {activeVote.selectedOptionId ? (
+                    <p>
+                      Current selection:{" "}
+                      {
+                        activeVote.options.find(
+                          option => option.id === activeVote.selectedOptionId
+                        )?.label
+                      }
+                    </p>
+                  ) : (
+                    <p>Select one option to submit your vote.</p>
+                  )}
+                </div>
               </CardContent>
             </Card>
           ) : null}
 
-          {ungroupedTracks.length > 0 ? (
+          <div
+            className={cn(
+              "space-y-6 transition-opacity",
+              voteInteractionLocked && "pointer-events-none opacity-25"
+            )}
+            aria-hidden={voteInteractionLocked}
+          >
+            {config.pulse.visible || pulseEnabled ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Zap />
+                    Pulse Sync
+                  </CardTitle>
+                  <CardDescription>
+                    Server-side beat messages keep every receiver aligned to one
+                    clock.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={pulseEnabled ? "default" : "secondary"}>
+                      {pulseEnabled ? "Pulse Live" : "Pulse Idle"}
+                    </Badge>
+                    <Badge variant="outline">{config.pulse.bpm} BPM</Badge>
+                    {pulseEvent ? (
+                      <Badge variant="outline">
+                        Beat #{pulseEvent.sequence + 1}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="rounded-2xl border border-border/60 bg-muted/30 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span>Beat Phase</span>
+                      <span>
+                        {pulseEnabled && pulseEvent
+                          ? `${Math.round(pulsePhase)}%`
+                          : "Waiting"}
+                      </span>
+                    </div>
+                    <Progress value={pulsePhase} className="h-3" />
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {visibleGroups.length > 0 ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Music />
+                    Sample Groups
+                  </CardTitle>
+                  <CardDescription>
+                    Group dropdowns stay dynamic while track markers continue to
+                    sync to the shared beat.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {visibleGroups.map(group => {
+                    const tracks = groupTrackMap[group.groupId] ?? [];
+                    const selectedTrackId = selectedTrackByGroup[group.groupId];
+                    const selectedTrack =
+                      tracks.find(track => track.trackId === selectedTrackId) ??
+                      tracks[0];
+
+                    if (!selectedTrack) {
+                      return null;
+                    }
+
+                    return (
+                      <div
+                        key={group.groupId}
+                        className={cn(
+                          "rounded-2xl border p-4 transition-colors",
+                          group.enabled
+                            ? "bg-muted/30"
+                            : "bg-muted/15 opacity-70"
+                        )}
+                        style={{ borderColor: `${group.color}55` }}
+                      >
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="size-2.5 rounded-full"
+                                style={{ backgroundColor: group.color }}
+                              />
+                              <span className="font-medium">{group.label}</span>
+                              <Badge
+                                variant={
+                                  group.enabled ? "secondary" : "outline"
+                                }
+                              >
+                                {group.enabled ? "Enabled" : "Locked"}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {tracks.length} track option
+                              {tracks.length === 1 ? "" : "s"}
+                            </p>
+                          </div>
+
+                          <div className="w-full md:max-w-xs">
+                            <Label className="sr-only">Choose track</Label>
+                            <Select
+                              value={selectedTrack.trackId}
+                              onValueChange={value =>
+                                handleGroupSelection(group.groupId, value)
+                              }
+                              disabled={!group.enabled}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Choose a track" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {tracks.map(track => (
+                                    <SelectItem
+                                      key={track.trackId}
+                                      value={track.trackId}
+                                    >
+                                      {track.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+
+                        <Separator className="my-4" />
+
+                        <ReceiverTrackCard
+                          track={selectedTrack}
+                          disabled={!group.enabled}
+                          activeVolumeTrackId={activeVolumeTrackId}
+                          onPlayToggle={handlePlayToggle}
+                          onLoopToggle={handleLoopToggle}
+                          onVolumeChange={handleVolumeChange}
+                          onVolumeDismiss={handleVolumeDismiss}
+                          onVolumeOpen={trackId =>
+                            setActiveVolumeTrackId(trackId)
+                          }
+                          nowMs={nowMs}
+                          pulseEvent={pulseEvent}
+                          beginContinuousInteraction={
+                            beginContinuousInteraction
+                          }
+                          endContinuousInteraction={endContinuousInteraction}
+                        />
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {ungroupedTracks.length > 0 ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <AudioLines />
+                    Direct Tracks
+                  </CardTitle>
+                  <CardDescription>
+                    Tracks without a visible group remain directly playable and
+                    keep their own fill markers.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-4 lg:grid-cols-2">
+                  {ungroupedTracks.map(track => (
+                    <ReceiverTrackCard
+                      key={track.trackId}
+                      track={track}
+                      disabled={false}
+                      activeVolumeTrackId={activeVolumeTrackId}
+                      onPlayToggle={handlePlayToggle}
+                      onLoopToggle={handleLoopToggle}
+                      onVolumeChange={handleVolumeChange}
+                      onVolumeDismiss={handleVolumeDismiss}
+                      onVolumeOpen={trackId => setActiveVolumeTrackId(trackId)}
+                      nowMs={nowMs}
+                      pulseEvent={pulseEvent}
+                      beginContinuousInteraction={beginContinuousInteraction}
+                      endContinuousInteraction={endContinuousInteraction}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
+
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <AudioLines />
-                  Direct Tracks
+                  <MessageSquare />
+                  Text Display
                 </CardTitle>
-                <CardDescription>
-                  Tracks without a visible group remain directly playable and
-                  keep their own fill markers.
-                </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-4 lg:grid-cols-2">
-                {ungroupedTracks.map(track => (
-                  <ReceiverTrackCard
-                    key={track.trackId}
-                    track={track}
-                    disabled={false}
-                    activeVolumeTrackId={activeVolumeTrackId}
-                    onPlayToggle={handlePlayToggle}
-                    onLoopToggle={handleLoopToggle}
-                    onVolumeChange={handleVolumeChange}
-                    onVolumeDismiss={handleVolumeDismiss}
-                    onVolumeOpen={trackId => setActiveVolumeTrackId(trackId)}
-                    nowMs={nowMs}
-                    pulseEvent={pulseEvent}
-                    beginContinuousInteraction={beginContinuousInteraction}
-                    endContinuousInteraction={endContinuousInteraction}
-                  />
-                ))}
+              <CardContent>
+                <div
+                  className={cn(
+                    "rounded-xl border px-4 py-6 text-center transition-all",
+                    messageFlash
+                      ? "border-primary/40 bg-primary/10"
+                      : "bg-muted/40"
+                  )}
+                >
+                  <p className="text-sm leading-6">
+                    {config.textDisplay.text || "No active message"}
+                  </p>
+                </div>
               </CardContent>
             </Card>
-          ) : null}
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <MessageSquare />
-                Text Display
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div
-                className={cn(
-                  "rounded-xl border px-4 py-6 text-center transition-all",
-                  messageFlash
-                    ? "border-primary/40 bg-primary/10"
-                    : "bg-muted/40"
-                )}
-              >
-                <p className="text-sm leading-6">
-                  {config.textDisplay.text || "No active message"}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          </div>
         </div>
       </main>
     </div>

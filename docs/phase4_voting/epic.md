@@ -53,15 +53,15 @@ interface VoteSubmission {
 
 ## 验收标准
 
-- [ ] 投票窗口弹出时冻结其他交互
-- [ ] 自定义问题文本 + 动态选项数正确渲染
-- [ ] 每人一票限制生效
-- [ ] revote 启用时可修改选择
-- [ ] visibilityDuration 超时自动关闭
-- [ ] 投票结果汇总后批量发送到 Unity
-- [ ] 未投票用户被标记
-- [ ] vote_reset_all 正常工作
-- [ ] JSON 导出 fallback 可用
+- [x] 投票窗口弹出时冻结其他交互
+- [x] 自定义问题文本 + 动态选项数正确渲染
+- [x] 每人一票限制生效
+- [x] revote 启用时可修改选择
+- [x] visibilityDuration 超时自动关闭
+- [x] 投票结果汇总后批量发送到 Unity
+- [x] 未投票用户被标记
+- [x] vote_reset_all 正常工作
+- [x] JSON 导出 fallback 可用
 
 ## 测试建议（无 Unity 客户端）
 

@@ -89,9 +89,56 @@ export interface VoteOption {
 }
 
 export interface VoteConfig extends VisibilityConfig {
-  title: string;
+  voteId: string;
+  question: string;
   options: VoteOption[];
+  visibilityDuration: number;
+  allowRevote: boolean;
   selectedOptionId: string | null;
+  submittedAt: string | null;
+}
+
+export interface VoteSubmission {
+  receiverId: string;
+  voteId: string;
+  selectedOptionId: string;
+  submittedAt: string;
+}
+
+export type VoteCloseReason =
+  | "timeout"
+  | "manual_close"
+  | "replaced"
+  | "reset";
+
+export interface VoteOptionResult {
+  optionId: string;
+  label: string;
+  voteCount: number;
+}
+
+export interface VoteEligibleReceiver {
+  receiverId: string;
+  label: string;
+  connected: boolean;
+  hasVoted: boolean;
+}
+
+export interface VoteSessionExport {
+  voteId: string;
+  question: string;
+  options: VoteOptionResult[];
+  allowRevote: boolean;
+  visibilityDuration: number;
+  openedAt: string;
+  closesAt: string | null;
+  closedAt: string | null;
+  closeReason: VoteCloseReason | null;
+  isActive: boolean;
+  submittedCount: number;
+  totalEligible: number;
+  missingReceiverIds: string[];
+  eligibleReceivers: VoteEligibleReceiver[];
 }
 
 export interface ScoreConfig extends VisibilityConfig {
@@ -165,6 +212,13 @@ export interface SetVoteStatePayload {
   vote: VoteConfig | null;
 }
 
+export interface VoteResetAllPayload extends JsonRecord {}
+
+export interface SubmitVotePayload {
+  voteId: string;
+  selectedOptionId: string;
+}
+
 export interface ResetAllStatePayload extends JsonRecord {}
 
 export type UnifiedCommand =
@@ -202,6 +256,12 @@ export type UnifiedCommand =
       command: "set_vote_state";
       targetId: string;
       payload: SetVoteStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "vote_reset_all";
+      targetId: string;
+      payload: VoteResetAllPayload;
       timestamp: string;
     }
   | {
@@ -267,6 +327,7 @@ export const WS_EVENTS = {
   REGISTER_UNITY: "register_unity",
   REQUEST_RECEIVER_STATE: "request_receiver_state",
   CONTROL_MESSAGE: "control_message",
+  SUBMIT_VOTE: "submit_vote",
   CLEAR_OFFLINE_RECEIVERS: "clear_offline_receivers",
   INTERACTION_EVENT: "interaction_event",
   PULSE: "pulse",

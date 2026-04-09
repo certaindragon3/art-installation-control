@@ -15,6 +15,7 @@ import {
   dispatchControlMessage,
   getConfigSnapshot,
   getReceiverList,
+  getVoteExports,
 } from "./wsServer";
 
 const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
@@ -24,6 +25,7 @@ const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
   "set_group_state",
   "set_module_state",
   "set_vote_state",
+  "vote_reset_all",
   "reset_all_state",
 ]);
 
@@ -118,31 +120,113 @@ function normalizeVoteConfig(value: unknown): VoteConfig | null {
     return null;
   }
 
-  if (typeof value.title !== "string") {
+  const voteId =
+    typeof value.voteId === "string"
+      ? value.voteId.trim()
+      : typeof value.id === "string"
+        ? value.id.trim()
+        : "";
+  if (!voteId) {
     return null;
   }
 
-  if (!Array.isArray(value.options)) {
+  const questionCandidate =
+    typeof value.question === "string"
+      ? value.question
+      : typeof value.voteQuestion === "string"
+        ? value.voteQuestion
+        : typeof value.title === "string"
+          ? value.title
+          : null;
+  if (!questionCandidate) {
     return null;
   }
+
+  const question = questionCandidate.trim();
+  const rawOptions = Array.isArray(value.options)
+    ? value.options
+    : Array.isArray(value.voteOptions)
+      ? value.voteOptions
+      : null;
+  if (!question || !rawOptions) {
+    return null;
+  }
+
+  const options = rawOptions
+    .map((option, index) => {
+      if (typeof option === "string") {
+        const label = option.trim();
+        if (!label) {
+          return null;
+        }
+
+        return {
+          id: `option_${index + 1}`,
+          label,
+        };
+      }
+
+      if (
+        isRecord(option) &&
+        typeof option.id === "string" &&
+        typeof option.label === "string"
+      ) {
+        const id = option.id.trim();
+        const label = option.label.trim();
+        if (!id || !label) {
+          return null;
+        }
+
+        return { id, label };
+      }
+
+      return null;
+    })
+    .filter((option): option is NonNullable<typeof option> => Boolean(option));
+
+  if (options.length === 0) {
+    return null;
+  }
+
+  const selectedOptionId =
+    typeof value.selectedOptionId === "string"
+      ? value.selectedOptionId.trim()
+      : null;
 
   return {
-    title: value.title,
-    visible: typeof value.visible === "boolean" ? value.visible : true,
-    enabled: typeof value.enabled === "boolean" ? value.enabled : true,
-    options: value.options
-      .filter(isRecord)
-      .filter(
-        (option): option is { id: string; label: string } =>
-          typeof option.id === "string" && typeof option.label === "string"
-      )
-      .map(option => ({
-        id: option.id,
-        label: option.label,
-      })),
+    voteId,
+    question,
+    visible:
+      typeof value.visible === "boolean"
+        ? value.visible
+        : typeof value.voteVisible === "boolean"
+          ? value.voteVisible
+          : true,
+    enabled:
+      typeof value.enabled === "boolean"
+        ? value.enabled
+        : typeof value.voteEnabled === "boolean"
+          ? value.voteEnabled
+          : true,
+    visibilityDuration:
+      typeof value.visibilityDuration === "number" &&
+      Number.isFinite(value.visibilityDuration)
+        ? Math.max(0, value.visibilityDuration)
+        : 15,
+    allowRevote:
+      typeof value.allowRevote === "boolean"
+        ? value.allowRevote
+        : typeof value.voteAllowRevote === "boolean"
+          ? value.voteAllowRevote
+          : false,
+    options,
     selectedOptionId:
-      typeof value.selectedOptionId === "string"
-        ? value.selectedOptionId
+      selectedOptionId && options.some(option => option.id === selectedOptionId)
+        ? selectedOptionId
+        : null,
+    submittedAt:
+      typeof value.submittedAt === "string" && value.submittedAt.trim()
+        ? value.submittedAt
         : null,
   };
 }
@@ -263,6 +347,14 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
         timestamp,
       };
     }
+    case "vote_reset_all": {
+      return {
+        command: "vote_reset_all",
+        targetId: body.targetId.trim(),
+        payload: {},
+        timestamp,
+      };
+    }
     case "reset_all_state": {
       return {
         command: "reset_all_state",
@@ -330,6 +422,13 @@ export function registerControllerApi(app: Express) {
       ok: true,
       removedReceiverIds,
       receivers: getReceiverList(),
+    });
+  });
+
+  app.get("/api/controller/votes/export", (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      votes: getVoteExports(),
     });
   });
 

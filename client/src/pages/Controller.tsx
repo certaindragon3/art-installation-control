@@ -47,6 +47,7 @@ import type {
 } from "@shared/wsTypes";
 import {
   AudioLines,
+  Download,
   Monitor,
   Music,
   Palette,
@@ -55,6 +56,7 @@ import {
   Send,
   SlidersHorizontal,
   Trash2,
+  Vote,
   Volume2,
   VolumeX,
   Wifi,
@@ -77,7 +79,7 @@ const PRESET_COLORS = [
 
 const UNGROUPED_GROUP_VALUE = "__ungrouped__";
 
-function createMachineId(prefix: "track" | "group", label: string) {
+function createMachineId(prefix: "track" | "group" | "vote", label: string) {
   const normalized = label
     .toLowerCase()
     .trim()
@@ -117,6 +119,15 @@ export default function Controller() {
   const [newTrackUrl, setNewTrackUrl] = useState("");
   const [newGroupLabel, setNewGroupLabel] = useState("");
   const [newGroupColor, setNewGroupColor] = useState("#f97316");
+  const [voteQuestionInput, setVoteQuestionInput] = useState(
+    "Which rule should be active next?"
+  );
+  const [voteOptionsInput, setVoteOptionsInput] = useState(
+    "Rule A\nRule B\nRule C"
+  );
+  const [voteVisibilityDuration, setVoteVisibilityDuration] = useState(15);
+  const [voteAllowRevote, setVoteAllowRevote] = useState(false);
+  const [exportingVotes, setExportingVotes] = useState(false);
 
   useEffect(() => {
     if (selectedReceiverId) {
@@ -162,10 +173,45 @@ export default function Controller() {
     () => selectedReceiver?.config.pulse ?? null,
     [selectedReceiver]
   );
+  const selectedVote = useMemo(
+    () => selectedReceiver?.config.vote ?? null,
+    [selectedReceiver]
+  );
   const offlineReceivers = useMemo(
     () => receivers.filter(receiver => !receiver.connected),
     [receivers]
   );
+  const selectedVoteReceivers = useMemo(() => {
+    if (!selectedVote) {
+      return [];
+    }
+
+    return receivers.filter(
+      receiver => receiver.config.vote?.voteId === selectedVote.voteId
+    );
+  }, [receivers, selectedVote]);
+  const selectedVoteSummary = useMemo(() => {
+    if (!selectedVote) {
+      return null;
+    }
+
+    const optionTallies = selectedVote.options.map(option => ({
+      ...option,
+      voteCount: selectedVoteReceivers.filter(
+        receiver => receiver.config.vote?.selectedOptionId === option.id
+      ).length,
+    }));
+    const missingReceivers = selectedVoteReceivers.filter(
+      receiver => receiver.config.vote?.selectedOptionId === null
+    );
+
+    return {
+      optionTallies,
+      missingReceivers,
+      submittedCount: selectedVoteReceivers.length - missingReceivers.length,
+      totalEligible: selectedVoteReceivers.length,
+    };
+  }, [selectedVote, selectedVoteReceivers]);
 
   const dispatchCommand = useCallback(
     (command: Omit<UnifiedCommand, "timestamp">) => {
@@ -523,6 +569,110 @@ export default function Controller() {
     });
   }, [dispatchCommand, postDiscreteInteraction]);
 
+  const handleLaunchVote = useCallback(
+    (targetId: string) => {
+      const question = voteQuestionInput.trim();
+      const optionLabels = voteOptionsInput
+        .split("\n")
+        .map(option => option.trim())
+        .filter(Boolean);
+
+      if (!question || optionLabels.length === 0) {
+        return;
+      }
+
+      const voteId = createMachineId("vote", question);
+      dispatchCommand({
+        command: "set_vote_state",
+        targetId,
+        payload: {
+          vote: {
+            voteId,
+            question,
+            options: optionLabels.map((label, index) => ({
+              id: `option_${index + 1}`,
+              label,
+            })),
+            visible: true,
+            enabled: true,
+            visibilityDuration: Math.max(0, voteVisibilityDuration),
+            allowRevote: voteAllowRevote,
+            selectedOptionId: null,
+            submittedAt: null,
+          },
+        },
+      });
+
+      postDiscreteInteraction({
+        action: "showVote",
+        element: "vote:launch",
+        value: {
+          voteId,
+          targetId,
+          question,
+          optionCount: optionLabels.length,
+          allowRevote: voteAllowRevote,
+          visibilityDuration: Math.max(0, voteVisibilityDuration),
+        },
+        receiverId: targetId === "*" ? null : targetId,
+      });
+    },
+    [
+      dispatchCommand,
+      postDiscreteInteraction,
+      voteAllowRevote,
+      voteOptionsInput,
+      voteQuestionInput,
+      voteVisibilityDuration,
+    ]
+  );
+
+  const handleVoteResetAll = useCallback(() => {
+    dispatchCommand({
+      command: "vote_reset_all",
+      targetId: "*",
+      payload: {},
+    });
+
+    postDiscreteInteraction({
+      action: "resetVotes",
+      element: "vote:reset_all",
+      value: true,
+      receiverId: null,
+    });
+  }, [dispatchCommand, postDiscreteInteraction]);
+
+  const handleVoteExport = useCallback(async () => {
+    setExportingVotes(true);
+
+    try {
+      const response = await fetch("/api/controller/votes/export");
+      if (!response.ok) {
+        throw new Error(`Failed to export votes: ${response.status}`);
+      }
+
+      const body = await response.json();
+      const blob = new Blob([JSON.stringify(body, null, 2)], {
+        type: "application/json",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `phase4-votes-${new Date().toISOString()}.json`;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+
+      postDiscreteInteraction({
+        action: "exportVotes",
+        element: "vote:export_json",
+        value: Array.isArray(body.votes) ? body.votes.length : 0,
+        receiverId: null,
+      });
+    } finally {
+      setExportingVotes(false);
+    }
+  }, [postDiscreteInteraction]);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border/60 bg-card/90 backdrop-blur">
@@ -533,10 +683,10 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 3 Controller
+                Phase 4 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Pulse orchestration, track markers, and audio-state control
+                Voting, pulse orchestration, and state-driven receiver control
               </p>
             </div>
           </div>
@@ -595,7 +745,7 @@ export default function Controller() {
                       <EmptyTitle>No Receivers Yet</EmptyTitle>
                       <EmptyDescription>
                         Open `/receiver/:id` in another tab to register a
-                        receiver before sending phase 3 commands.
+                        receiver before sending phase 4 commands.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -682,6 +832,218 @@ export default function Controller() {
 
             {selectedReceiver ? (
               <>
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Vote />
+                      Voting Orchestration
+                    </CardTitle>
+                    <CardDescription>
+                      Launch one question at a time, lock the receiver surface,
+                      and export aggregated JSON as a Unity fallback.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                      <Field orientation="responsive">
+                        <FieldLabel htmlFor="vote-question">
+                          Vote Question
+                        </FieldLabel>
+                        <FieldContent>
+                          <Input
+                            id="vote-question"
+                            value={voteQuestionInput}
+                            onChange={event =>
+                              setVoteQuestionInput(event.target.value)
+                            }
+                            placeholder="Which rule should be active next?"
+                          />
+                        </FieldContent>
+                      </Field>
+                      <Field orientation="responsive">
+                        <FieldLabel htmlFor="vote-options">
+                          Options
+                        </FieldLabel>
+                        <FieldContent>
+                          <Textarea
+                            id="vote-options"
+                            value={voteOptionsInput}
+                            onChange={event =>
+                              setVoteOptionsInput(event.target.value)
+                            }
+                            placeholder={"Rule A\nRule B\nRule C"}
+                            className="min-h-28"
+                          />
+                          <FieldDescription>
+                            One option per line. Order stays stable and becomes
+                            the submitted option id.
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field orientation="responsive">
+                          <FieldLabel htmlFor="vote-duration">
+                            Visibility (s)
+                          </FieldLabel>
+                          <FieldContent>
+                            <Input
+                              id="vote-duration"
+                              type="number"
+                              min={0}
+                              value={voteVisibilityDuration}
+                              onChange={event =>
+                                setVoteVisibilityDuration(
+                                  Number(event.target.value) || 0
+                                )
+                              }
+                            />
+                          </FieldContent>
+                        </Field>
+                        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium">Allow Revote</p>
+                            <p className="text-xs text-muted-foreground">
+                              Let receivers revise their choice before timeout.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={voteAllowRevote}
+                            onCheckedChange={setVoteAllowRevote}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          onClick={() =>
+                            handleLaunchVote(selectedReceiver.receiverId)
+                          }
+                          disabled={
+                            !voteQuestionInput.trim() ||
+                            voteOptionsInput
+                              .split("\n")
+                              .map(option => option.trim())
+                              .filter(Boolean).length === 0
+                          }
+                        >
+                          <Send data-icon="inline-start" />
+                          Launch for Selected
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => handleLaunchVote("*")}
+                          disabled={
+                            !voteQuestionInput.trim() ||
+                            voteOptionsInput
+                              .split("\n")
+                              .map(option => option.trim())
+                              .filter(Boolean).length === 0
+                          }
+                        >
+                          Broadcast Vote
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={handleVoteResetAll}
+                          disabled={!selectedVote}
+                        >
+                          <RotateCcw data-icon="inline-start" />
+                          Reset Votes
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          onClick={handleVoteExport}
+                          disabled={exportingVotes}
+                        >
+                          <Download data-icon="inline-start" />
+                          {exportingVotes ? "Exporting..." : "Export JSON"}
+                        </Button>
+                      </div>
+                    </FieldGroup>
+
+                    {selectedVote && selectedVoteSummary ? (
+                      <div className="rounded-xl border border-border/60 bg-muted/25 p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge
+                                variant={
+                                  selectedVote.visible ? "default" : "secondary"
+                                }
+                              >
+                                {selectedVote.visible ? "Vote Live" : "Closed"}
+                              </Badge>
+                              <Badge variant="outline">
+                                {selectedVoteSummary.submittedCount}/
+                                {selectedVoteSummary.totalEligible} submitted
+                              </Badge>
+                              <Badge variant="outline">
+                                {selectedVote.allowRevote
+                                  ? "Revote On"
+                                  : "Revote Off"}
+                              </Badge>
+                            </div>
+                            <p className="text-sm font-medium">
+                              {selectedVote.question}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Vote ID: {selectedVote.voteId} · auto close after{" "}
+                              {selectedVote.visibilityDuration}s
+                            </p>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Missing voters:{" "}
+                            {selectedVoteSummary.missingReceivers.length}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                          {selectedVoteSummary.optionTallies.map(option => (
+                            <div
+                              key={option.id}
+                              className="rounded-lg border border-border/60 bg-background px-3 py-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="font-medium">
+                                  {option.label}
+                                </span>
+                                <Badge variant="secondary">
+                                  {option.voteCount}
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="mt-4 rounded-lg border border-border/60 bg-background px-3 py-3">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Missing Receivers
+                          </p>
+                          <p className="mt-1 text-sm">
+                            {selectedVoteSummary.missingReceivers.length > 0
+                              ? selectedVoteSummary.missingReceivers
+                                  .map(receiver => receiver.label)
+                                  .join(", ")
+                              : "All targeted receivers have voted."}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <Empty className="border-border/70 bg-muted/20">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <Vote />
+                          </EmptyMedia>
+                          <EmptyTitle>No Active Vote</EmptyTitle>
+                          <EmptyDescription>
+                            Launch a question to freeze receiver interaction and
+                            start collecting responses.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    )}
+                  </CardContent>
+                </Card>
+
                 <Card>
                   <CardHeader className="pb-3">
                     <CardTitle className="flex items-center gap-2 text-base">
@@ -1157,7 +1519,7 @@ export default function Controller() {
                       <EmptyTitle>Select a Receiver</EmptyTitle>
                       <EmptyDescription>
                         Pick a receiver to inspect its live config snapshot and
-                        drive phase 3 commands.
+                        drive phase 4 commands.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>

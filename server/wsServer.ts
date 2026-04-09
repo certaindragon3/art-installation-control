@@ -20,10 +20,14 @@ import {
   type SetGroupStatePayload,
   type SetModuleStatePayload,
   type SetTrackStatePayload,
-  type SetVoteStatePayload,
+  type SubmitVotePayload,
   type TrackState,
   type UnifiedCommand,
   type UnityInteractionEvent,
+  type VoteCloseReason,
+  type VoteConfig,
+  type VoteSessionExport,
+  type VoteSubmission,
   WS_EVENTS,
 } from "../shared/wsTypes";
 
@@ -37,6 +41,22 @@ type InternalReceiverState = {
   config: ReturnType<typeof createDefaultReceiverConfig>;
 };
 
+type VoteSession = {
+  voteId: string;
+  question: string;
+  options: VoteConfig["options"];
+  allowRevote: boolean;
+  visibilityDuration: number;
+  targetReceiverIds: Set<string>;
+  submissions: Map<string, VoteSubmission>;
+  openedAt: string;
+  closesAt: string | null;
+  closedAt: string | null;
+  closeReason: VoteCloseReason | null;
+  isActive: boolean;
+  timeoutId: ReturnType<typeof setTimeout> | null;
+};
+
 const RECEIVER_RETENTION_MS = 10 * 60 * 1000;
 const RECEIVER_CLEANUP_INTERVAL_MS = 60 * 1000;
 
@@ -44,6 +64,8 @@ const receivers = new Map<string, InternalReceiverState>();
 const controllers = new Set<string>();
 const unities = new Set<string>();
 const pulseLoops = new Map<string, PulseScheduler>();
+const voteSessions = new Map<string, VoteSession>();
+const receiverActiveVotes = new Map<string, string>();
 
 let io: Server | null = null;
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -97,6 +119,149 @@ function emitReceiverStateToRoom(
   );
 }
 
+function buildVoteConfigForReceiver(
+  state: InternalReceiverState,
+  vote: VoteConfig
+): VoteConfig {
+  const previousVote = state.config.vote;
+  const canPreserveSelection =
+    previousVote?.voteId === vote.voteId &&
+    previousVote.selectedOptionId !== null &&
+    vote.options.some(option => option.id === previousVote.selectedOptionId);
+
+  return {
+    ...structuredClone(vote),
+    selectedOptionId: canPreserveSelection
+      ? previousVote?.selectedOptionId ?? null
+      : null,
+    submittedAt: canPreserveSelection ? previousVote?.submittedAt ?? null : null,
+  };
+}
+
+function applyVoteState(state: InternalReceiverState, vote: VoteConfig | null) {
+  state.config.vote = vote ? buildVoteConfigForReceiver(state, vote) : null;
+  return true;
+}
+
+function resetReceiverVoteSelection(
+  state: InternalReceiverState,
+  voteId?: string
+) {
+  if (!state.config.vote) {
+    return false;
+  }
+
+  if (voteId && state.config.vote.voteId !== voteId) {
+    return false;
+  }
+
+  const changed =
+    state.config.vote.selectedOptionId !== null ||
+    state.config.vote.submittedAt !== null;
+
+  state.config.vote.selectedOptionId = null;
+  state.config.vote.submittedAt = null;
+  return changed;
+}
+
+function hideReceiverVote(state: InternalReceiverState, voteId: string) {
+  if (!state.config.vote || state.config.vote.voteId !== voteId) {
+    return false;
+  }
+
+  if (!state.config.vote.visible) {
+    return false;
+  }
+
+  state.config.vote.visible = false;
+  return true;
+}
+
+function clearReceiverVote(state: InternalReceiverState, voteId?: string) {
+  if (!state.config.vote) {
+    return false;
+  }
+
+  if (voteId && state.config.vote.voteId !== voteId) {
+    return false;
+  }
+
+  state.config.vote = null;
+  return true;
+}
+
+function clearVoteTimeout(session: VoteSession) {
+  if (session.timeoutId) {
+    clearTimeout(session.timeoutId);
+    session.timeoutId = null;
+  }
+}
+
+function buildVoteExport(session: VoteSession): VoteSessionExport {
+  const options = session.options.map(option => ({
+    optionId: option.id,
+    label: option.label,
+    voteCount: Array.from(session.submissions.values()).filter(
+      submission => submission.selectedOptionId === option.id
+    ).length,
+  }));
+
+  const eligibleReceivers = Array.from(session.targetReceiverIds).map(
+    receiverId => {
+      const receiver = receivers.get(receiverId);
+      return {
+        receiverId,
+        label: receiver?.label ?? `Receiver ${receiverId}`,
+        connected: receiver?.connected ?? false,
+        hasVoted: session.submissions.has(receiverId),
+      };
+    }
+  );
+
+  return {
+    voteId: session.voteId,
+    question: session.question,
+    options,
+    allowRevote: session.allowRevote,
+    visibilityDuration: session.visibilityDuration,
+    openedAt: session.openedAt,
+    closesAt: session.closesAt,
+    closedAt: session.closedAt,
+    closeReason: session.closeReason,
+    isActive: session.isActive,
+    submittedCount: session.submissions.size,
+    totalEligible: session.targetReceiverIds.size,
+    missingReceiverIds: eligibleReceivers
+      .filter(receiver => !receiver.hasVoted)
+      .map(receiver => receiver.receiverId),
+    eligibleReceivers,
+  };
+}
+
+function emitUnityEvent(event: UnityInteractionEvent) {
+  if (!io) {
+    return;
+  }
+
+  io.to("unity").emit(WS_EVENTS.INTERACTION_EVENT, event);
+}
+
+function emitVoteResults(voteId: string) {
+  const session = voteSessions.get(voteId);
+  if (!session) {
+    return;
+  }
+
+  emitUnityEvent({
+    sourceRole: "controller",
+    receiverId: null,
+    action: "voteResults",
+    element: "vote:results",
+    value: buildVoteExport(session),
+    timestamp: new Date().toISOString(),
+  });
+}
+
 function destroyPulseLoop(receiverId: string) {
   const loop = pulseLoops.get(receiverId);
   if (!loop) {
@@ -105,6 +270,197 @@ function destroyPulseLoop(receiverId: string) {
 
   loop.stop();
   pulseLoops.delete(receiverId);
+}
+
+function closeVoteSession(
+  voteId: string,
+  reason: VoteCloseReason,
+  clearConfig = false
+) {
+  const session = voteSessions.get(voteId);
+  if (!session) {
+    return new Set<string>();
+  }
+
+  clearVoteTimeout(session);
+  session.isActive = false;
+  session.closedAt = new Date().toISOString();
+  session.closeReason = reason;
+
+  const updatedReceiverIds = new Set<string>();
+
+  session.targetReceiverIds.forEach(receiverId => {
+    if (receiverActiveVotes.get(receiverId) === voteId) {
+      receiverActiveVotes.delete(receiverId);
+    }
+
+    const state = receivers.get(receiverId);
+    if (!state) {
+      return;
+    }
+
+    const changed = clearConfig
+      ? clearReceiverVote(state, voteId)
+      : hideReceiverVote(state, voteId);
+    if (!changed) {
+      return;
+    }
+
+    incrementConfigVersion(state);
+    updatedReceiverIds.add(receiverId);
+  });
+
+  return updatedReceiverIds;
+}
+
+function detachReceiversFromVoteSession(
+  voteId: string,
+  receiverIds: string[],
+  clearConfig = true
+) {
+  const session = voteSessions.get(voteId);
+  if (!session) {
+    return new Set<string>();
+  }
+
+  const updatedReceiverIds = new Set<string>();
+  const receiverIdSet = new Set(receiverIds);
+
+  receiverIdSet.forEach(receiverId => {
+    if (!session.targetReceiverIds.has(receiverId)) {
+      return;
+    }
+
+    session.targetReceiverIds.delete(receiverId);
+    session.submissions.delete(receiverId);
+
+    if (receiverActiveVotes.get(receiverId) === voteId) {
+      receiverActiveVotes.delete(receiverId);
+    }
+
+    const state = receivers.get(receiverId);
+    if (!state) {
+      return;
+    }
+
+    const changed = clearConfig
+      ? clearReceiverVote(state, voteId)
+      : hideReceiverVote(state, voteId);
+    if (!changed) {
+      return;
+    }
+
+    incrementConfigVersion(state);
+    updatedReceiverIds.add(receiverId);
+  });
+
+  if (session.targetReceiverIds.size === 0) {
+    clearVoteTimeout(session);
+    voteSessions.delete(voteId);
+  }
+
+  return updatedReceiverIds;
+}
+
+function scheduleVoteAutoClose(voteId: string) {
+  const session = voteSessions.get(voteId);
+  if (!session) {
+    return;
+  }
+
+  clearVoteTimeout(session);
+
+  if (!session.isActive || session.visibilityDuration <= 0) {
+    session.closesAt = null;
+    return;
+  }
+
+  const waitMs = session.visibilityDuration * 1000;
+  session.closesAt = new Date(Date.now() + waitMs).toISOString();
+  session.timeoutId = setTimeout(() => {
+    const updatedReceiverIds = closeVoteSession(voteId, "timeout");
+    updatedReceiverIds.forEach(receiverId => {
+      const state = receivers.get(receiverId);
+      if (state) {
+        emitReceiverStateToRoom(receiverId, state);
+      }
+    });
+    if (updatedReceiverIds.size > 0) {
+      broadcastReceiverList();
+    }
+    emitVoteResults(voteId);
+  }, waitMs);
+}
+
+function upsertVoteSession(vote: VoteConfig, receiverIds: string[]) {
+  const existing = voteSessions.get(vote.voteId);
+  const nowIso = new Date().toISOString();
+  const nextReceiverIds = new Set(receiverIds);
+
+  if (!existing || !existing.isActive) {
+    voteSessions.set(vote.voteId, {
+      voteId: vote.voteId,
+      question: vote.question,
+      options: structuredClone(vote.options),
+      allowRevote: vote.allowRevote,
+      visibilityDuration: vote.visibilityDuration,
+      targetReceiverIds: nextReceiverIds,
+      submissions: new Map(),
+      openedAt: nowIso,
+      closesAt: null,
+      closedAt: null,
+      closeReason: null,
+      isActive: vote.visible,
+      timeoutId: null,
+    });
+    if (vote.visible) {
+      scheduleVoteAutoClose(vote.voteId);
+    }
+    return;
+  }
+
+  existing.question = vote.question;
+  existing.options = structuredClone(vote.options);
+  existing.allowRevote = vote.allowRevote;
+  existing.visibilityDuration = vote.visibilityDuration;
+  existing.targetReceiverIds = nextReceiverIds;
+  existing.isActive = vote.visible;
+  existing.closedAt = null;
+  existing.closeReason = null;
+
+  Array.from(existing.submissions.entries()).forEach(([receiverId, submission]) => {
+    if (
+      !existing.targetReceiverIds.has(receiverId) ||
+      !existing.options.some(option => option.id === submission.selectedOptionId)
+    ) {
+      existing.submissions.delete(receiverId);
+    }
+  });
+
+  if (vote.visible) {
+    scheduleVoteAutoClose(vote.voteId);
+    return;
+  }
+
+  clearVoteTimeout(existing);
+  existing.closesAt = null;
+}
+
+function dropReceiverFromVoteSessions(receiverId: string) {
+  const activeVoteId = receiverActiveVotes.get(receiverId);
+  if (activeVoteId) {
+    receiverActiveVotes.delete(receiverId);
+  }
+
+  voteSessions.forEach((session, voteId) => {
+    session.targetReceiverIds.delete(receiverId);
+    session.submissions.delete(receiverId);
+
+    if (session.targetReceiverIds.size === 0) {
+      clearVoteTimeout(session);
+      voteSessions.delete(voteId);
+    }
+  });
 }
 
 function shouldPulseRun(state: InternalReceiverState) {
@@ -480,10 +836,9 @@ function applyCommand(
       }
       return false;
     case "set_vote_state":
-      state.config.vote = command.payload.vote
-        ? structuredClone(command.payload.vote)
-        : null;
-      return true;
+      return applyVoteState(state, command.payload.vote);
+    case "vote_reset_all":
+      return resetReceiverVoteSelection(state);
     case "reset_all_state":
       state.config = createDefaultReceiverConfig();
       return true;
@@ -517,12 +872,22 @@ export function getConfigSnapshot() {
   };
 }
 
+export function getVoteExports() {
+  return Array.from(voteSessions.values())
+    .sort(
+      (left, right) =>
+        new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime()
+    )
+    .map(buildVoteExport);
+}
+
 function removeDisconnectedReceivers(): string[] {
   const removedIds: string[] = [];
 
   receivers.forEach((state, receiverId) => {
     if (!state.connected) {
       destroyPulseLoop(receiverId);
+      dropReceiverFromVoteSessions(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
     }
@@ -540,12 +905,230 @@ function removeExpiredReceivers(now = Date.now()): string[] {
       now - state.disconnectedAt >= RECEIVER_RETENTION_MS
     ) {
       destroyPulseLoop(receiverId);
+      dropReceiverFromVoteSessions(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
     }
   });
 
   return removedIds;
+}
+
+function publishReceiverUpdates(receiverIds: Iterable<string>) {
+  const updatedReceiverIds = Array.from(new Set(receiverIds));
+  updatedReceiverIds.forEach(receiverId => {
+    const state = receivers.get(receiverId);
+    if (state) {
+      emitReceiverStateToRoom(receiverId, state);
+    }
+  });
+
+  if (updatedReceiverIds.length > 0) {
+    broadcastReceiverList();
+  }
+}
+
+function applyVoteCommandEffects(
+  command: UnifiedCommand,
+  deliveredReceiverIds: string[]
+) {
+  const updatedReceiverIds = new Set<string>();
+  const votesToEmit = new Set<string>();
+
+  if (command.command === "set_vote_state") {
+    const vote = command.payload.vote;
+
+    if (!vote || !vote.visible) {
+      const voteId = vote?.voteId;
+      const groupedReceiverIds = new Map<string, string[]>();
+
+      deliveredReceiverIds.forEach(receiverId => {
+        const activeVoteId =
+          voteId ??
+          receivers.get(receiverId)?.config.vote?.voteId ??
+          receiverActiveVotes.get(receiverId);
+        if (!activeVoteId) {
+          return;
+        }
+
+        const current = groupedReceiverIds.get(activeVoteId) ?? [];
+        current.push(receiverId);
+        groupedReceiverIds.set(activeVoteId, current);
+      });
+
+      groupedReceiverIds.forEach((receiverIds, activeVoteId) => {
+        const session = voteSessions.get(activeVoteId);
+        if (!session) {
+          return;
+        }
+
+        if (receiverIds.length === session.targetReceiverIds.size) {
+          closeVoteSession(
+            activeVoteId,
+            "manual_close",
+            command.payload.vote === null
+          ).forEach(receiverId => updatedReceiverIds.add(receiverId));
+          votesToEmit.add(activeVoteId);
+          return;
+        }
+
+        detachReceiversFromVoteSession(
+          activeVoteId,
+          receiverIds,
+          command.payload.vote === null
+        ).forEach(receiverId => updatedReceiverIds.add(receiverId));
+      });
+
+      return { updatedReceiverIds, votesToEmit };
+    }
+
+    const replacedGroups = new Map<string, string[]>();
+    deliveredReceiverIds.forEach(receiverId => {
+      const previousVoteId = receiverActiveVotes.get(receiverId);
+      if (!previousVoteId || previousVoteId === vote.voteId) {
+        return;
+      }
+
+      const current = replacedGroups.get(previousVoteId) ?? [];
+      current.push(receiverId);
+      replacedGroups.set(previousVoteId, current);
+    });
+
+    replacedGroups.forEach((receiverIds, previousVoteId) => {
+      const session = voteSessions.get(previousVoteId);
+      if (!session) {
+        return;
+      }
+
+      if (receiverIds.length === session.targetReceiverIds.size) {
+        closeVoteSession(previousVoteId, "replaced", true).forEach(receiverId =>
+          updatedReceiverIds.add(receiverId)
+        );
+        votesToEmit.add(previousVoteId);
+        return;
+      }
+
+      detachReceiversFromVoteSession(previousVoteId, receiverIds, true).forEach(
+        receiverId => updatedReceiverIds.add(receiverId)
+      );
+    });
+
+    deliveredReceiverIds.forEach(receiverId => {
+      receiverActiveVotes.set(receiverId, vote.voteId);
+    });
+    upsertVoteSession(vote, deliveredReceiverIds);
+
+    return { updatedReceiverIds, votesToEmit };
+  }
+
+  if (command.command === "vote_reset_all") {
+    deliveredReceiverIds.forEach(receiverId => {
+      voteSessions.forEach(session => {
+        session.submissions.delete(receiverId);
+      });
+
+      const state = receivers.get(receiverId);
+      if (!state) {
+        return;
+      }
+
+      if (resetReceiverVoteSelection(state)) {
+        updatedReceiverIds.add(receiverId);
+      }
+    });
+
+    voteSessions.forEach(session => {
+      if (!session.isActive && session.submissions.size === 0) {
+        session.closeReason = "reset";
+      }
+    });
+
+    return { updatedReceiverIds, votesToEmit };
+  }
+
+  if (command.command === "reset_all_state") {
+    deliveredReceiverIds.forEach(receiverId => {
+      const activeVoteId = receiverActiveVotes.get(receiverId);
+      if (!activeVoteId) {
+        voteSessions.forEach(session => {
+          session.targetReceiverIds.delete(receiverId);
+          session.submissions.delete(receiverId);
+        });
+        return;
+      }
+
+      const session = voteSessions.get(activeVoteId);
+      if (!session) {
+        receiverActiveVotes.delete(receiverId);
+        return;
+      }
+
+      if (session.targetReceiverIds.size === 1) {
+        closeVoteSession(activeVoteId, "reset", true).forEach(id =>
+          updatedReceiverIds.add(id)
+        );
+        votesToEmit.add(activeVoteId);
+        return;
+      }
+
+      detachReceiversFromVoteSession(activeVoteId, [receiverId], true).forEach(
+        id => updatedReceiverIds.add(id)
+      );
+    });
+
+    return { updatedReceiverIds, votesToEmit };
+  }
+
+  return { updatedReceiverIds, votesToEmit };
+}
+
+function submitVote(socket: Socket, payload: SubmitVotePayload) {
+  if (
+    socket.data.role !== "receiver" ||
+    typeof socket.data.receiverId !== "string"
+  ) {
+    console.warn(`[WS] Ignored vote submission from ${socket.id}`);
+    return;
+  }
+
+  const receiverId = socket.data.receiverId;
+  const state = receivers.get(receiverId);
+  if (!state || !state.config.vote) {
+    return;
+  }
+
+  const vote = state.config.vote;
+  if (
+    !vote.visible ||
+    !vote.enabled ||
+    vote.voteId !== payload.voteId ||
+    !vote.options.some(option => option.id === payload.selectedOptionId)
+  ) {
+    return;
+  }
+
+  if (!vote.allowRevote && vote.selectedOptionId !== null) {
+    return;
+  }
+
+  const session = voteSessions.get(payload.voteId);
+  if (!session || !session.isActive || !session.targetReceiverIds.has(receiverId)) {
+    return;
+  }
+
+  const submittedAt = new Date().toISOString();
+  state.config.vote.selectedOptionId = payload.selectedOptionId;
+  state.config.vote.submittedAt = submittedAt;
+  session.submissions.set(receiverId, {
+    receiverId,
+    voteId: payload.voteId,
+    selectedOptionId: payload.selectedOptionId,
+    submittedAt,
+  });
+
+  incrementConfigVersion(state);
+  emitReceiverStateToRoom(receiverId, state);
+  broadcastReceiverList();
 }
 
 function forwardInteractionEvent(socket: Socket, event: UnityInteractionEvent) {
@@ -572,7 +1155,7 @@ function forwardInteractionEvent(socket: Socket, event: UnityInteractionEvent) {
         : null
       : (event.receiverId ?? null);
 
-  io.to("unity").emit(WS_EVENTS.INTERACTION_EVENT, {
+  emitUnityEvent({
     ...event,
     sourceRole,
     receiverId,
@@ -695,6 +1278,10 @@ export function initWebSocket(httpServer: HttpServer): Server {
       dispatchControlMessage(input);
     });
 
+    socket.on(WS_EVENTS.SUBMIT_VOTE, (payload: SubmitVotePayload) => {
+      submitVote(socket, payload);
+    });
+
     socket.on(WS_EVENTS.CLEAR_OFFLINE_RECEIVERS, () => {
       if (!controllers.has(socket.id)) {
         console.warn(`[WS] Ignored offline cleanup from ${socket.id}`);
@@ -743,21 +1330,29 @@ export function dispatchControlMessage(
   const command = normalizeCommand(input);
 
   if (command.targetId === "*") {
-    const deliveredReceiverIds = Array.from(receivers.entries()).map(
-      ([receiverId, state]) => {
-        if (applyCommand(state, command)) {
-          incrementConfigVersion(state);
-        }
+    const deliveredReceiverIds = Array.from(receivers.keys());
 
-        syncPulseLoop(receiverId, state);
-        io!
-          .to(`receiver:${receiverId}`)
-          .emit(WS_EVENTS.RECEIVER_COMMAND, command);
-        emitReceiverStateToRoom(receiverId, state);
-        return receiverId;
+    deliveredReceiverIds.forEach(receiverId => {
+      const state = receivers.get(receiverId);
+      if (!state) {
+        return;
       }
-    );
 
+      if (applyCommand(state, command)) {
+        incrementConfigVersion(state);
+      }
+
+      syncPulseLoop(receiverId, state);
+      io!.to(`receiver:${receiverId}`).emit(WS_EVENTS.RECEIVER_COMMAND, command);
+      emitReceiverStateToRoom(receiverId, state);
+    });
+
+    const { updatedReceiverIds, votesToEmit } = applyVoteCommandEffects(
+      command,
+      deliveredReceiverIds
+    );
+    publishReceiverUpdates(updatedReceiverIds);
+    votesToEmit.forEach(voteId => emitVoteResults(voteId));
     broadcastReceiverList();
     return {
       broadcast: true,
@@ -788,6 +1383,11 @@ export function dispatchControlMessage(
     command
   );
   emitReceiverStateToRoom(command.targetId, state);
+  const { updatedReceiverIds, votesToEmit } = applyVoteCommandEffects(command, [
+    command.targetId,
+  ]);
+  publishReceiverUpdates(updatedReceiverIds);
+  votesToEmit.forEach(voteId => emitVoteResults(voteId));
   broadcastReceiverList();
 
   return {
@@ -813,6 +1413,9 @@ export async function resetWebSocketState() {
   unities.clear();
   pulseLoops.forEach(loop => loop.stop());
   pulseLoops.clear();
+  voteSessions.forEach(session => clearVoteTimeout(session));
+  voteSessions.clear();
+  receiverActiveVotes.clear();
   receivers.clear();
 
   if (cleanupInterval) {

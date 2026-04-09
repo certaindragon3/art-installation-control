@@ -1218,6 +1218,366 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("aggregates vote results, marks missing voters, and exports JSON after timeout", async () => {
+    const receiverA = await connectSocket(baseUrl);
+    const receiverB = await connectSocket(baseUrl);
+    const receiverC = await connectSocket(baseUrl);
+    const unity = await connectSocket(baseUrl);
+    sockets.push(receiverA, receiverB, receiverC, unity);
+
+    unity.emit(WS_EVENTS.REGISTER_UNITY);
+
+    const receiverAStatePromise = waitForEvent(
+      receiverA,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverA.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Screen A",
+    });
+    await receiverAStatePromise;
+
+    const receiverBStatePromise = waitForEvent(
+      receiverB,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverB.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-b",
+      label: "Screen B",
+    });
+    await receiverBStatePromise;
+
+    const receiverCStatePromise = waitForEvent(
+      receiverC,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverC.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-c",
+      label: "Screen C",
+    });
+    await receiverCStatePromise;
+
+    const voteOpenA = waitForEvent<{
+      config: { vote: { voteId: string; question: string; visible: boolean } };
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const voteOpenB = waitForEvent<{
+      config: { vote: { voteId: string; question: string; visible: boolean } };
+    }>(receiverB, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const voteOpenC = waitForEvent<{
+      config: { vote: { voteId: string; question: string; visible: boolean } };
+    }>(receiverC, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const openVoteResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_vote_state",
+        targetId: "*",
+        payload: {
+          vote: {
+            voteId: "vote_timeout_001",
+            voteQuestion: "Which rule should be active next?",
+            voteOptions: ["Rule A", "Rule B", "Rule C"],
+            voteVisible: true,
+            visibilityDuration: 0.15,
+            voteAllowRevote: true,
+          },
+        },
+      }),
+    });
+
+    expect(openVoteResponse.status).toBe(200);
+    expect(await voteOpenA).toMatchObject({
+      config: {
+        vote: {
+          voteId: "vote_timeout_001",
+          question: "Which rule should be active next?",
+          visible: true,
+        },
+      },
+    });
+    expect(await voteOpenB).toMatchObject({
+      config: {
+        vote: {
+          voteId: "vote_timeout_001",
+          question: "Which rule should be active next?",
+          visible: true,
+        },
+      },
+    });
+    expect(await voteOpenC).toMatchObject({
+      config: {
+        vote: {
+          voteId: "vote_timeout_001",
+          question: "Which rule should be active next?",
+          visible: true,
+        },
+      },
+    });
+
+    const submitAState = waitForEvent<{
+      config: { vote: { selectedOptionId: string; submittedAt: string } };
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiverA.emit(WS_EVENTS.SUBMIT_VOTE, {
+      voteId: "vote_timeout_001",
+      selectedOptionId: "option_1",
+    });
+    expect(await submitAState).toMatchObject({
+      config: {
+        vote: {
+          selectedOptionId: "option_1",
+        },
+      },
+    });
+
+    const submitBState = waitForEvent<{
+      config: { vote: { selectedOptionId: string; submittedAt: string } };
+    }>(receiverB, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiverB.emit(WS_EVENTS.SUBMIT_VOTE, {
+      voteId: "vote_timeout_001",
+      selectedOptionId: "option_2",
+    });
+    expect(await submitBState).toMatchObject({
+      config: {
+        vote: {
+          selectedOptionId: "option_2",
+        },
+      },
+    });
+
+    const revoteAState = waitForEvent<{
+      config: { vote: { selectedOptionId: string; submittedAt: string } };
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiverA.emit(WS_EVENTS.SUBMIT_VOTE, {
+      voteId: "vote_timeout_001",
+      selectedOptionId: "option_3",
+    });
+    expect(await revoteAState).toMatchObject({
+      config: {
+        vote: {
+          selectedOptionId: "option_3",
+        },
+      },
+    });
+
+    const timeoutResultPromise = waitForEvent<{
+      action: string;
+      value: {
+        voteId: string;
+        submittedCount: number;
+        totalEligible: number;
+        missingReceiverIds: string[];
+        closeReason: string;
+        isActive: boolean;
+        options: Array<{ optionId: string; voteCount: number }>;
+      };
+    }>(unity, WS_EVENTS.INTERACTION_EVENT);
+
+    expect(await timeoutResultPromise).toMatchObject({
+      action: "voteResults",
+      value: {
+        voteId: "vote_timeout_001",
+        submittedCount: 2,
+        totalEligible: 3,
+        missingReceiverIds: ["screen-c"],
+        closeReason: "timeout",
+        isActive: false,
+        options: [
+          { optionId: "option_1", voteCount: 0 },
+          { optionId: "option_2", voteCount: 1 },
+          { optionId: "option_3", voteCount: 1 },
+        ],
+      },
+    });
+
+    await waitFor(async () => {
+      const response = await fetch(`${baseUrl}/api/controller/receivers`);
+      const body = await response.json();
+      return body.receivers.every(
+        (receiver: {
+          config: { vote: { visible: boolean } | null };
+        }) => receiver.config.vote?.visible === false
+      );
+    });
+
+    const exportResponse = await fetch(`${baseUrl}/api/controller/votes/export`);
+    const exportBody = await exportResponse.json();
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportBody).toMatchObject({
+      ok: true,
+      votes: [
+        {
+          voteId: "vote_timeout_001",
+          submittedCount: 2,
+          totalEligible: 3,
+          missingReceiverIds: ["screen-c"],
+          closeReason: "timeout",
+          isActive: false,
+        },
+      ],
+    });
+  });
+
+  it("blocks revote when disabled and vote_reset_all clears current selections", async () => {
+    const receiverA = await connectSocket(baseUrl);
+    const receiverB = await connectSocket(baseUrl);
+    sockets.push(receiverA, receiverB);
+
+    const receiverAStatePromise = waitForEvent(
+      receiverA,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverA.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Screen A",
+    });
+    await receiverAStatePromise;
+
+    const receiverBStatePromise = waitForEvent(
+      receiverB,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverB.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-b",
+      label: "Screen B",
+    });
+    await receiverBStatePromise;
+
+    const voteOpenA = waitForEvent<{
+      config: { vote: { voteId: string; allowRevote: boolean } };
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const voteOpenB = waitForEvent<{
+      config: { vote: { voteId: string; allowRevote: boolean } };
+    }>(receiverB, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const openVoteResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_vote_state",
+        targetId: "*",
+        payload: {
+          vote: {
+            voteId: "vote_reset_001",
+            question: "Choose a color",
+            options: [
+              { id: "red", label: "Red" },
+              { id: "blue", label: "Blue" },
+            ],
+            visible: true,
+            visibilityDuration: 30,
+            allowRevote: false,
+          },
+        },
+      }),
+    });
+
+    expect(openVoteResponse.status).toBe(200);
+    expect(await voteOpenA).toMatchObject({
+      config: {
+        vote: {
+          voteId: "vote_reset_001",
+          allowRevote: false,
+        },
+      },
+    });
+    expect(await voteOpenB).toMatchObject({
+      config: {
+        vote: {
+          voteId: "vote_reset_001",
+          allowRevote: false,
+        },
+      },
+    });
+
+    const firstVoteState = waitForEvent<{
+      config: { vote: { selectedOptionId: string } };
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiverA.emit(WS_EVENTS.SUBMIT_VOTE, {
+      voteId: "vote_reset_001",
+      selectedOptionId: "red",
+    });
+    expect(await firstVoteState).toMatchObject({
+      config: {
+        vote: {
+          selectedOptionId: "red",
+        },
+      },
+    });
+
+    receiverA.emit(WS_EVENTS.SUBMIT_VOTE, {
+      voteId: "vote_reset_001",
+      selectedOptionId: "blue",
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const receiversResponseBeforeReset = await fetch(
+      `${baseUrl}/api/controller/receivers`
+    );
+    const receiversBodyBeforeReset = await receiversResponseBeforeReset.json();
+
+    expect(receiversBodyBeforeReset.receivers).toMatchObject([
+      expect.objectContaining({
+        receiverId: "screen-a",
+        config: expect.objectContaining({
+          vote: expect.objectContaining({
+            selectedOptionId: "red",
+          }),
+        }),
+      }),
+      expect.anything(),
+    ]);
+
+    const resetVoteA = waitForEvent<{
+      config: { vote: { selectedOptionId: null; submittedAt: null } };
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const resetResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "vote_reset_all",
+        targetId: "*",
+        payload: {},
+      }),
+    });
+
+    expect(resetResponse.status).toBe(200);
+    expect(await resetVoteA).toMatchObject({
+      config: {
+        vote: {
+          selectedOptionId: null,
+          submittedAt: null,
+        },
+      },
+    });
+
+    const exportResponse = await fetch(`${baseUrl}/api/controller/votes/export`);
+    const exportBody = await exportResponse.json();
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportBody).toMatchObject({
+      ok: true,
+      votes: [
+        {
+          voteId: "vote_reset_001",
+          submittedCount: 0,
+          totalEligible: 2,
+          missingReceiverIds: ["screen-a", "screen-b"],
+          isActive: true,
+        },
+      ],
+    });
+  });
+
   it("clears offline receivers and returns useful HTTP errors", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);

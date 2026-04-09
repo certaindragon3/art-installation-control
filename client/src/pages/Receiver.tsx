@@ -1,29 +1,46 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "wouter";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
+import { usePostToUnity } from "@/hooks/usePostToUnity";
 import { useSocket } from "@/hooks/useSocket";
+import { cn } from "@/lib/utils";
+import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
+import { createDefaultReceiverConfig, type TrackState } from "@shared/wsTypes";
 import {
-  createDefaultReceiverConfig,
-  type TrackState,
-} from "@shared/wsTypes";
-import {
+  AudioLines,
   Hexagon,
   MessageSquare,
   Music,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
   Wifi,
   WifiOff,
 } from "lucide-react";
-
-function toPerceptualGain(value: number) {
-  if (value <= 0) {
-    return 0;
-  }
-
-  return Math.min(1, Math.pow(value, 1.8));
-}
 
 function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
   if (!track.url) {
@@ -36,7 +53,7 @@ function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
   }
 
   audio.loop = track.loopEnabled;
-  audio.volume = toPerceptualGain(track.volumeValue);
+  audio.volume = volumeValueToGain(track.volumeValue);
 
   if (!track.playable || !track.enabled || !track.visible) {
     audio.pause();
@@ -44,7 +61,7 @@ function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
   }
 
   if (track.playing) {
-    audio.play().catch((error) => {
+    audio.play().catch(error => {
       console.warn(`Failed to play ${track.trackId}:`, error);
     });
     return;
@@ -56,24 +73,61 @@ function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
 export default function Receiver() {
   const params = useParams<{ id: string }>();
   const receiverId = params.id || "unknown";
-  const { connected, receiverState, requestReceiverState } = useSocket({
+  const {
+    connected,
+    receiverState,
+    requestReceiverState,
+    sendCommand,
+    postInteraction,
+  } = useSocket({
     role: "receiver",
     receiverId,
     receiverLabel: `Receiver ${receiverId}`,
   });
+  const {
+    postDiscreteInteraction,
+    beginContinuousInteraction,
+    endContinuousInteraction,
+  } = usePostToUnity({
+    sourceRole: "receiver",
+    receiverId,
+    postInteraction,
+  });
 
   const audioMapRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const [messageFlash, setMessageFlash] = useState(false);
+  const [selectedTrackByGroup, setSelectedTrackByGroup] = useState<
+    Record<string, string>
+  >({});
+  const [activeVolumeTrackId, setActiveVolumeTrackId] = useState<string | null>(
+    null
+  );
+
   const config = useMemo(
     () => receiverState?.config ?? createDefaultReceiverConfig(),
     [receiverState]
   );
   const iconColor = config.visuals.iconColor;
 
+  const dispatchTrackPatch = useCallback(
+    (trackId: string, patch: Partial<TrackState>) => {
+      sendCommand({
+        command: "set_track_state",
+        targetId: receiverId,
+        payload: {
+          trackId,
+          patch,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    },
+    [receiverId, sendCommand]
+  );
+
   useEffect(() => {
     const audioMap = audioMapRef.current;
 
-    config.tracks.forEach((track) => {
+    config.tracks.forEach(track => {
       const existing = audioMap.get(track.trackId);
       if (existing) {
         return;
@@ -85,7 +139,7 @@ export default function Receiver() {
     });
 
     Array.from(audioMap.entries()).forEach(([trackId, audio]) => {
-      if (config.tracks.some((track) => track.trackId === trackId)) {
+      if (config.tracks.some(track => track.trackId === trackId)) {
         return;
       }
 
@@ -95,7 +149,7 @@ export default function Receiver() {
   }, [config.tracks]);
 
   useEffect(() => {
-    config.tracks.forEach((track) => {
+    config.tracks.forEach(track => {
       const audio = audioMapRef.current.get(track.trackId);
       if (!audio) {
         return;
@@ -131,16 +185,186 @@ export default function Receiver() {
 
   useEffect(() => {
     return () => {
-      audioMapRef.current.forEach((audio) => {
+      audioMapRef.current.forEach(audio => {
         audio.pause();
       });
       audioMapRef.current.clear();
     };
   }, []);
 
-  const activeTracks = useMemo(
-    () => config.tracks.filter((track) => track.visible),
+  const visibleTracks = useMemo(
+    () => config.tracks.filter(track => track.visible),
     [config.tracks]
+  );
+  const visibleGroups = useMemo(
+    () => config.groups.filter(group => group.visible),
+    [config.groups]
+  );
+
+  const groupTrackMap = useMemo(() => {
+    const trackMap = new Map<string, TrackState>();
+    visibleTracks.forEach(track => {
+      trackMap.set(track.trackId, track);
+    });
+
+    return visibleGroups.reduce<Record<string, TrackState[]>>((acc, group) => {
+      acc[group.groupId] = group.trackIds
+        .map(trackId => trackMap.get(trackId))
+        .filter((track): track is TrackState => Boolean(track));
+      return acc;
+    }, {});
+  }, [visibleGroups, visibleTracks]);
+
+  const hiddenOrMissingGroupIds = useMemo(() => {
+    const ids = new Set<string>();
+    config.groups.forEach(group => {
+      if (!group.visible) {
+        ids.add(group.groupId);
+      }
+    });
+    return ids;
+  }, [config.groups]);
+
+  const ungroupedTracks = useMemo(
+    () =>
+      visibleTracks.filter(
+        track =>
+          !track.groupId ||
+          (!groupTrackMap[track.groupId] &&
+            !hiddenOrMissingGroupIds.has(track.groupId))
+      ),
+    [groupTrackMap, hiddenOrMissingGroupIds, visibleTracks]
+  );
+
+  useEffect(() => {
+    setSelectedTrackByGroup(current => {
+      const next = { ...current };
+
+      visibleGroups.forEach(group => {
+        const tracks = groupTrackMap[group.groupId] ?? [];
+        if (tracks.length === 0) {
+          delete next[group.groupId];
+          return;
+        }
+
+        const currentTrackId = current[group.groupId];
+        if (
+          currentTrackId &&
+          tracks.some(track => track.trackId === currentTrackId)
+        ) {
+          return;
+        }
+
+        next[group.groupId] =
+          tracks.find(track => track.playing)?.trackId ?? tracks[0].trackId;
+      });
+
+      Object.keys(next).forEach(groupId => {
+        if (!visibleGroups.some(group => group.groupId === groupId)) {
+          delete next[groupId];
+        }
+      });
+
+      return next;
+    });
+  }, [groupTrackMap, visibleGroups]);
+
+  useEffect(() => {
+    if (!activeVolumeTrackId) {
+      return;
+    }
+
+    const activeTrack = config.tracks.find(
+      track => track.trackId === activeVolumeTrackId
+    );
+    if (
+      !activeTrack ||
+      !activeTrack.playing ||
+      !activeTrack.volumeControlVisible ||
+      !activeTrack.volumeControlEnabled
+    ) {
+      setActiveVolumeTrackId(null);
+    }
+  }, [activeVolumeTrackId, config.tracks]);
+
+  const handlePlayToggle = useCallback(
+    (track: TrackState) => {
+      const nextPlaying = !track.playing;
+      dispatchTrackPatch(track.trackId, { playing: nextPlaying });
+      postDiscreteInteraction({
+        action: nextPlaying ? "play" : "pause",
+        element: `track:${track.trackId}:transport`,
+        value: nextPlaying,
+      });
+
+      if (
+        nextPlaying &&
+        track.volumeControlVisible &&
+        track.volumeControlEnabled
+      ) {
+        setActiveVolumeTrackId(track.trackId);
+        return;
+      }
+
+      if (!nextPlaying && activeVolumeTrackId === track.trackId) {
+        setActiveVolumeTrackId(null);
+      }
+    },
+    [activeVolumeTrackId, dispatchTrackPatch, postDiscreteInteraction]
+  );
+
+  const handleLoopToggle = useCallback(
+    (track: TrackState) => {
+      if (!track.loopControlVisible || track.loopControlLocked) {
+        return;
+      }
+
+      const nextLoop = !track.loopEnabled;
+      dispatchTrackPatch(track.trackId, { loopEnabled: nextLoop });
+      postDiscreteInteraction({
+        action: "toggleLoop",
+        element: `track:${track.trackId}:loop`,
+        value: nextLoop,
+      });
+    },
+    [dispatchTrackPatch, postDiscreteInteraction]
+  );
+
+  const handleVolumeDismiss = useCallback(
+    (track: TrackState) => {
+      dispatchTrackPatch(track.trackId, { playing: false });
+      postDiscreteInteraction({
+        action: "dismissVolume",
+        element: `track:${track.trackId}:volume_outside`,
+        value: "outside",
+      });
+      setActiveVolumeTrackId(current =>
+        current === track.trackId ? null : current
+      );
+    },
+    [dispatchTrackPatch, postDiscreteInteraction]
+  );
+
+  const handleVolumeChange = useCallback(
+    (track: TrackState, value: number) => {
+      dispatchTrackPatch(track.trackId, { volumeValue: value });
+    },
+    [dispatchTrackPatch]
+  );
+
+  const handleGroupSelection = useCallback(
+    (groupId: string, trackId: string) => {
+      setSelectedTrackByGroup(current => ({
+        ...current,
+        [groupId]: trackId,
+      }));
+      postDiscreteInteraction({
+        action: "selectGroupTrack",
+        element: `group:${groupId}:dropdown`,
+        value: trackId,
+      });
+    },
+    [postDiscreteInteraction]
   );
 
   return (
@@ -149,30 +373,33 @@ export default function Receiver() {
         <div className="container flex h-14 items-center justify-between">
           <div className="flex items-center gap-3">
             <div
-              className="flex h-9 w-9 items-center justify-center rounded-xl transition-colors duration-500"
+              className="flex size-9 items-center justify-center rounded-xl transition-colors duration-500"
               style={{ backgroundColor: `${iconColor}20` }}
             >
-              <Hexagon className="h-5 w-5" style={{ color: iconColor }} />
+              <Hexagon style={{ color: iconColor }} />
             </div>
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                State-driven config consumer
+                Phase 2 audio interaction surface
               </p>
             </div>
           </div>
-          <Badge variant={connected ? "default" : "destructive"} className="gap-1.5">
-            {connected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+          <Badge
+            variant={connected ? "default" : "destructive"}
+            className="gap-1.5"
+          >
+            {connected ? <Wifi /> : <WifiOff />}
             {connected ? "Online" : "Offline"}
           </Badge>
         </div>
       </header>
 
       <main className="container py-8">
-        <div className="mx-auto max-w-2xl space-y-6">
-          <section className="flex flex-col items-center py-10">
+        <div className="mx-auto max-w-4xl space-y-6">
+          <section className="flex flex-col items-center py-6">
             <div
-              className="flex h-36 w-36 items-center justify-center rounded-[2rem] shadow-lg transition-all duration-700"
+              className="flex h-32 w-32 items-center justify-center rounded-[2rem] shadow-lg transition-all duration-700"
               style={{
                 backgroundColor: `${iconColor}15`,
                 boxShadow: `0 0 50px ${iconColor}30, 0 0 120px ${iconColor}12`,
@@ -194,105 +421,161 @@ export default function Receiver() {
             </p>
           </section>
 
-          <Card>
-            <CardContent className="pt-6">
-              <div className="mb-4 flex items-center gap-2">
-                <Music className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Dynamic Tracks</span>
-              </div>
-              <div className="space-y-3">
-                {activeTracks.map((track) => (
-                  <div
-                    key={track.trackId}
-                    className={`rounded-xl border p-4 transition-colors ${
-                      track.playing
-                        ? "border-primary/30 bg-primary/8"
-                        : "border-border/60 bg-muted/40"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        {track.playable ? (
-                          <Volume2
-                            className={`h-4 w-4 ${
-                              track.playing
-                                ? "animate-pulse text-primary"
-                                : "text-muted-foreground"
-                            }`}
-                          />
-                        ) : (
-                          <VolumeX className="h-4 w-4 text-destructive" />
-                        )}
+          {visibleGroups.length > 0 ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Music />
+                  Sample Groups
+                </CardTitle>
+                <CardDescription>
+                  Group dropdowns stay dynamic and gray out when access is
+                  disabled.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {visibleGroups.map(group => {
+                  const tracks = groupTrackMap[group.groupId] ?? [];
+                  const selectedTrackId = selectedTrackByGroup[group.groupId];
+                  const selectedTrack =
+                    tracks.find(track => track.trackId === selectedTrackId) ??
+                    tracks[0];
+
+                  if (!selectedTrack) {
+                    return null;
+                  }
+
+                  return (
+                    <div
+                      key={group.groupId}
+                      className={cn(
+                        "rounded-2xl border p-4 transition-colors",
+                        group.enabled ? "bg-muted/30" : "bg-muted/15 opacity-70"
+                      )}
+                      style={{ borderColor: `${group.color}55` }}
+                    >
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                         <div>
-                          <p className="text-sm font-medium">{track.label}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {track.trackId} · fill {track.fillTime}s · loop{" "}
-                            {track.loopEnabled ? "on" : "off"}
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="size-2.5 rounded-full"
+                              style={{ backgroundColor: group.color }}
+                            />
+                            <span className="font-medium">{group.label}</span>
+                            <Badge
+                              variant={group.enabled ? "secondary" : "outline"}
+                            >
+                              {group.enabled ? "Enabled" : "Locked"}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {tracks.length} track option
+                            {tracks.length === 1 ? "" : "s"}
                           </p>
                         </div>
+
+                        <div className="w-full md:max-w-xs">
+                          <Label className="sr-only">Choose track</Label>
+                          <Select
+                            value={selectedTrack.trackId}
+                            onValueChange={value =>
+                              handleGroupSelection(group.groupId, value)
+                            }
+                            disabled={!group.enabled}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Choose a track" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {tracks.map(track => (
+                                  <SelectItem
+                                    key={track.trackId}
+                                    value={track.trackId}
+                                  >
+                                    {track.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
-                      <Badge
-                        variant={
-                          track.playing
-                            ? "default"
-                            : track.playable
-                              ? "secondary"
-                              : "destructive"
+
+                      <Separator className="my-4" />
+
+                      <ReceiverTrackCard
+                        track={selectedTrack}
+                        disabled={!group.enabled}
+                        activeVolumeTrackId={activeVolumeTrackId}
+                        onPlayToggle={handlePlayToggle}
+                        onLoopToggle={handleLoopToggle}
+                        onVolumeChange={handleVolumeChange}
+                        onVolumeDismiss={handleVolumeDismiss}
+                        onVolumeOpen={trackId =>
+                          setActiveVolumeTrackId(trackId)
                         }
-                      >
-                        {track.playing
-                          ? "Playing"
-                          : track.playable
-                            ? "Ready"
-                            : "Muted"}
-                      </Badge>
+                        beginContinuousInteraction={beginContinuousInteraction}
+                        endContinuousInteraction={endContinuousInteraction}
+                      />
                     </div>
-                  </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {ungroupedTracks.length > 0 ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <AudioLines />
+                  Direct Tracks
+                </CardTitle>
+                <CardDescription>
+                  Tracks without a visible group remain directly playable.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 lg:grid-cols-2">
+                {ungroupedTracks.map(track => (
+                  <ReceiverTrackCard
+                    key={track.trackId}
+                    track={track}
+                    disabled={false}
+                    activeVolumeTrackId={activeVolumeTrackId}
+                    onPlayToggle={handlePlayToggle}
+                    onLoopToggle={handleLoopToggle}
+                    onVolumeChange={handleVolumeChange}
+                    onVolumeDismiss={handleVolumeDismiss}
+                    onVolumeOpen={trackId => setActiveVolumeTrackId(trackId)}
+                    beginContinuousInteraction={beginContinuousInteraction}
+                    endContinuousInteraction={endContinuousInteraction}
+                  />
                 ))}
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
-            <CardContent className="pt-6">
-              <div className="mb-4 flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Text Display</span>
-              </div>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <MessageSquare />
+                Text Display
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
               <div
-                className={`rounded-xl border px-4 py-6 text-center transition-all ${
-                  messageFlash ? "border-primary/40 bg-primary/10" : "bg-muted/40"
-                }`}
+                className={cn(
+                  "rounded-xl border px-4 py-6 text-center transition-all",
+                  messageFlash
+                    ? "border-primary/40 bg-primary/10"
+                    : "bg-muted/40"
+                )}
               >
                 <p className="text-sm leading-6">
                   {config.textDisplay.text || "No active message"}
                 </p>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="grid gap-4 pt-6 sm:grid-cols-2">
-              <ReceiverMetaTile
-                label="Pulse"
-                value={config.pulse.active ? `${config.pulse.bpm} BPM` : "Off"}
-              />
-              <ReceiverMetaTile
-                label="Score"
-                value={config.score.visible ? String(config.score.value) : "Hidden"}
-              />
-              <ReceiverMetaTile
-                label="Map"
-                value={
-                  config.map.visible
-                    ? `${config.map.playerPosX.toFixed(2)}, ${config.map.playerPosY.toFixed(2)}`
-                    : "Hidden"
-                }
-              />
-              <ReceiverMetaTile
-                label="Vote"
-                value={config.vote ? `${config.vote.options.length} options` : "Inactive"}
-              />
             </CardContent>
           </Card>
         </div>
@@ -301,19 +584,171 @@ export default function Receiver() {
   );
 }
 
-function ReceiverMetaTile({
-  label,
-  value,
+function ReceiverTrackCard({
+  track,
+  disabled,
+  activeVolumeTrackId,
+  onPlayToggle,
+  onLoopToggle,
+  onVolumeChange,
+  onVolumeDismiss,
+  onVolumeOpen,
+  beginContinuousInteraction,
+  endContinuousInteraction,
 }: {
-  label: string;
-  value: string;
+  track: TrackState;
+  disabled: boolean;
+  activeVolumeTrackId: string | null;
+  onPlayToggle: (track: TrackState) => void;
+  onLoopToggle: (track: TrackState) => void;
+  onVolumeChange: (track: TrackState, value: number) => void;
+  onVolumeDismiss: (track: TrackState) => void;
+  onVolumeOpen: (trackId: string | null) => void;
+  beginContinuousInteraction: ReturnType<
+    typeof usePostToUnity
+  >["beginContinuousInteraction"];
+  endContinuousInteraction: ReturnType<
+    typeof usePostToUnity
+  >["endContinuousInteraction"];
 }) {
+  const volumeOpen =
+    activeVolumeTrackId === track.trackId &&
+    track.playing &&
+    track.volumeControlVisible &&
+    track.volumeControlEnabled;
+
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/35 p-4">
-      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-        {label}
-      </p>
-      <p className="mt-2 text-sm font-medium">{value}</p>
+    <div className="rounded-xl border border-border/60 bg-card/80 p-4">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{track.label}</span>
+              <Badge variant={track.playing ? "default" : "secondary"}>
+                {track.playing ? "Playing" : "Idle"}
+              </Badge>
+              {!track.playable ? (
+                <Badge variant="destructive">Unavailable</Badge>
+              ) : null}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {track.trackId} · volume {volumeValueToPercent(track.volumeValue)}
+              % · loop {track.loopEnabled ? "on" : "off"}
+            </p>
+          </div>
+
+          <Button
+            size="sm"
+            variant={track.playing ? "secondary" : "default"}
+            disabled={disabled || !track.playable}
+            onClick={() => onPlayToggle(track)}
+          >
+            {track.playing ? (
+              <VolumeX data-icon="inline-start" />
+            ) : (
+              <Volume2 data-icon="inline-start" />
+            )}
+            {track.playing ? "Stop" : "Play"}
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {track.loopControlVisible ? (
+            <Button
+              size="sm"
+              variant={track.loopEnabled ? "default" : "outline"}
+              disabled={disabled || track.loopControlLocked}
+              onClick={() => onLoopToggle(track)}
+            >
+              <AudioLines data-icon="inline-start" />
+              {track.loopControlLocked
+                ? "Loop Locked"
+                : track.loopEnabled
+                  ? "Loop On"
+                  : "Loop Off"}
+            </Button>
+          ) : (
+            <Badge variant="outline">Loop Hidden</Badge>
+          )}
+
+          {track.volumeControlEnabled ? (
+            <Popover
+              open={volumeOpen}
+              onOpenChange={open => {
+                if (open && track.playing && track.volumeControlVisible) {
+                  onVolumeOpen(track.trackId);
+                  return;
+                }
+
+                if (!open && activeVolumeTrackId === track.trackId) {
+                  onVolumeOpen(null);
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  size="sm"
+                  variant={volumeOpen ? "secondary" : "outline"}
+                  disabled={
+                    disabled || !track.playing || !track.volumeControlVisible
+                  }
+                >
+                  <SlidersHorizontal data-icon="inline-start" />
+                  Volume
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                className="w-[min(24rem,calc(100vw-2rem))] rounded-2xl p-5"
+                onInteractOutside={event => {
+                  event.preventDefault();
+                  onVolumeDismiss(track);
+                }}
+              >
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm font-medium">{track.label}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Logarithmic gain mapping for performative control.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-border/60 bg-muted/35 p-4">
+                    <Slider
+                      value={[track.volumeValue]}
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      className="py-4"
+                      onPointerDownCapture={() =>
+                        beginContinuousInteraction({
+                          element: `track:${track.trackId}:volume`,
+                          startValue: track.volumeValue,
+                        })
+                      }
+                      onValueChange={([value]) =>
+                        onVolumeChange(track, value ?? 0)
+                      }
+                      onValueCommit={([value]) =>
+                        endContinuousInteraction({
+                          element: `track:${track.trackId}:volume`,
+                          endValue: value ?? 0,
+                        })
+                      }
+                    />
+                    <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Soft</span>
+                      <span>{volumeValueToPercent(track.volumeValue)}%</span>
+                      <span>Full</span>
+                    </div>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          ) : (
+            <Badge variant="outline">Volume External</Badge>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

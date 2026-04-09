@@ -1,5 +1,6 @@
 import { Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
+import { clampVolumeValue } from "../shared/audio";
 import {
   CONFIG_TTL_MS,
   type ControlInputMessage,
@@ -9,6 +10,7 @@ import {
   type ModuleName,
   type ReceiverRegistration,
   type ReceiverState,
+  type RemoveGroupPayload,
   type RemoveTrackPayload,
   type SetGroupStatePayload,
   type SetModuleStatePayload,
@@ -75,7 +77,10 @@ function emitReceiverState(socket: Socket, state: InternalReceiverState) {
   socket.emit(WS_EVENTS.RECEIVER_STATE_UPDATE, serializeReceiverState(state));
 }
 
-function emitReceiverStateToRoom(receiverId: string, state: InternalReceiverState) {
+function emitReceiverStateToRoom(
+  receiverId: string,
+  state: InternalReceiverState
+) {
   if (!io) {
     return;
   }
@@ -86,8 +91,23 @@ function emitReceiverStateToRoom(receiverId: string, state: InternalReceiverStat
   );
 }
 
-function canSendControlCommands(socketId: string) {
-  return controllers.has(socketId) || unities.has(socketId);
+function canSendControlCommands(socket: Socket, input: ControlInputMessage) {
+  if (controllers.has(socket.id) || unities.has(socket.id)) {
+    return true;
+  }
+
+  if (
+    socket.data.role !== "receiver" ||
+    typeof socket.data.receiverId !== "string"
+  ) {
+    return false;
+  }
+
+  const command = normalizeCommand(input);
+  return (
+    command.command === "set_track_state" &&
+    command.targetId === socket.data.receiverId
+  );
 }
 
 function isUnifiedCommand(input: ControlInputMessage): input is UnifiedCommand {
@@ -108,7 +128,7 @@ function getTrack(
   state: InternalReceiverState,
   trackId: string
 ): TrackState | undefined {
-  return state.config.tracks.find((track) => track.trackId === trackId);
+  return state.config.tracks.find(track => track.trackId === trackId);
 }
 
 function createTrackFromPatch(
@@ -134,7 +154,9 @@ function createTrackFromPatch(
         ? patch.loopControlLocked
         : false,
     volumeValue:
-      typeof patch.volumeValue === "number" ? patch.volumeValue : 1,
+      typeof patch.volumeValue === "number"
+        ? clampVolumeValue(patch.volumeValue)
+        : 1,
     volumeControlVisible:
       typeof patch.volumeControlVisible === "boolean"
         ? patch.volumeControlVisible
@@ -155,20 +177,101 @@ function createTrackFromPatch(
   };
 }
 
+function removeTrackFromAllGroups(
+  state: InternalReceiverState,
+  trackId: string,
+  exceptGroupId?: string | null
+) {
+  state.config.groups.forEach(group => {
+    if (group.groupId === exceptGroupId) {
+      return;
+    }
+
+    group.trackIds = group.trackIds.filter(candidate => candidate !== trackId);
+  });
+}
+
+function syncTrackGroupMembership(
+  state: InternalReceiverState,
+  track: TrackState
+) {
+  removeTrackFromAllGroups(state, track.trackId, track.groupId);
+
+  if (!track.groupId) {
+    return;
+  }
+
+  const group = state.config.groups.find(
+    candidate => candidate.groupId === track.groupId
+  );
+  if (!group) {
+    track.groupId = null;
+    return;
+  }
+
+  if (!group.trackIds.includes(track.trackId)) {
+    group.trackIds.push(track.trackId);
+  }
+}
+
+function syncGroupTrackMembership(
+  state: InternalReceiverState,
+  groupId: string,
+  trackIds: string[]
+) {
+  const nextTrackIds = Array.from(
+    new Set(
+      trackIds.filter(trackId =>
+        state.config.tracks.some(track => track.trackId === trackId)
+      )
+    )
+  );
+
+  const group = state.config.groups.find(
+    candidate => candidate.groupId === groupId
+  );
+  if (!group) {
+    return;
+  }
+
+  group.trackIds = nextTrackIds;
+  const trackIdSet = new Set(nextTrackIds);
+
+  state.config.tracks.forEach(track => {
+    if (trackIdSet.has(track.trackId)) {
+      track.groupId = groupId;
+      removeTrackFromAllGroups(state, track.trackId, groupId);
+      return;
+    }
+
+    if (track.groupId === groupId) {
+      track.groupId = null;
+    }
+  });
+}
+
 function applyTrackPatch(
   state: InternalReceiverState,
   payload: SetTrackStatePayload
 ) {
   const existing = getTrack(state, payload.trackId);
   if (existing) {
-    Object.assign(existing, payload.patch);
+    const { trackId: _ignoredTrackId, ...patch } = payload.patch;
+    Object.assign(existing, patch);
     if (existing.playable === false) {
       existing.playing = false;
+    }
+    existing.volumeValue = clampVolumeValue(existing.volumeValue);
+    existing.fillTime = Math.max(0, existing.fillTime);
+    if ("groupId" in payload.patch) {
+      syncTrackGroupMembership(state, existing);
     }
     return true;
   }
 
-  state.config.tracks.push(createTrackFromPatch(payload.trackId, payload.patch));
+  const nextTrack = createTrackFromPatch(payload.trackId, payload.patch);
+  state.config.tracks.push(nextTrack);
+  syncTrackGroupMembership(state, nextTrack);
   return true;
 }
 
@@ -177,7 +280,7 @@ function removeTrack(
   payload: RemoveTrackPayload
 ) {
   const nextTracks = state.config.tracks.filter(
-    (track) => track.trackId !== payload.trackId
+    track => track.trackId !== payload.trackId
   );
 
   if (nextTracks.length === state.config.tracks.length) {
@@ -185,8 +288,32 @@ function removeTrack(
   }
 
   state.config.tracks = nextTracks;
-  state.config.groups.forEach((group) => {
-    group.trackIds = group.trackIds.filter((trackId) => trackId !== payload.trackId);
+  state.config.groups.forEach(group => {
+    group.trackIds = group.trackIds.filter(
+      trackId => trackId !== payload.trackId
+    );
+  });
+  return true;
+}
+
+function removeGroup(
+  state: InternalReceiverState,
+  payload: RemoveGroupPayload
+) {
+  const existing = state.config.groups.find(
+    group => group.groupId === payload.groupId
+  );
+  if (!existing) {
+    return false;
+  }
+
+  state.config.groups = state.config.groups.filter(
+    group => group.groupId !== payload.groupId
+  );
+  state.config.tracks.forEach(track => {
+    if (track.groupId === payload.groupId) {
+      track.groupId = null;
+    }
   });
   return true;
 }
@@ -196,11 +323,15 @@ function applyGroupPatch(
   payload: SetGroupStatePayload
 ) {
   const existing = state.config.groups.find(
-    (group) => group.groupId === payload.groupId
+    group => group.groupId === payload.groupId
   );
 
   if (existing) {
-    Object.assign(existing, payload.patch);
+    const { groupId: _ignoredGroupId, ...patch } = payload.patch;
+    Object.assign(existing, patch);
+    if (Array.isArray(payload.patch.trackIds)) {
+      syncGroupTrackMembership(state, existing.groupId, payload.patch.trackIds);
+    }
     return true;
   }
 
@@ -224,6 +355,9 @@ function applyGroupPatch(
   };
 
   state.config.groups.push(nextGroup);
+  if (nextGroup.trackIds.length > 0) {
+    syncGroupTrackMembership(state, nextGroup.groupId, nextGroup.trackIds);
+  }
   return true;
 }
 
@@ -237,17 +371,22 @@ function assignModulePatch<T extends ModuleName>(
 }
 
 function stopAllTracks(state: InternalReceiverState) {
-  state.config.tracks.forEach((track) => {
+  state.config.tracks.forEach(track => {
     track.playing = false;
   });
 }
 
-function applyCommand(state: InternalReceiverState, command: UnifiedCommand): boolean {
+function applyCommand(
+  state: InternalReceiverState,
+  command: UnifiedCommand
+): boolean {
   switch (command.command) {
     case "set_track_state":
       return applyTrackPatch(state, command.payload);
     case "remove_track":
       return removeTrack(state, command.payload);
+    case "remove_group":
+      return removeGroup(state, command.payload);
     case "set_group_state":
       return applyGroupPatch(state, command.payload);
     case "set_module_state":
@@ -287,7 +426,7 @@ function broadcastReceiverList() {
   }
 
   const list = getReceiverList();
-  controllers.forEach((controllerId) => {
+  controllers.forEach(controllerId => {
     io!.to(controllerId).emit(WS_EVENTS.RECEIVER_LIST, {
       receivers: list,
     });
@@ -295,7 +434,9 @@ function broadcastReceiverList() {
 }
 
 export function getReceiverList(): ReceiverState[] {
-  return Array.from(receivers.values()).map((state) => serializeReceiverState(state));
+  return Array.from(receivers.values()).map(state =>
+    serializeReceiverState(state)
+  );
 }
 
 export function getConfigSnapshot() {
@@ -346,7 +487,9 @@ function forwardInteractionEvent(socket: Socket, event: UnityInteractionEvent) {
       : null;
 
   if (!sourceRole) {
-    console.warn(`[WS] Ignored interaction event from unauthorised ${socket.id}`);
+    console.warn(
+      `[WS] Ignored interaction event from unauthorised ${socket.id}`
+    );
     return;
   }
 
@@ -355,7 +498,7 @@ function forwardInteractionEvent(socket: Socket, event: UnityInteractionEvent) {
       ? typeof socket.data.receiverId === "string"
         ? socket.data.receiverId
         : null
-      : event.receiverId ?? null;
+      : (event.receiverId ?? null);
 
   io.to("unity").emit(WS_EVENTS.INTERACTION_EVENT, {
     ...event,
@@ -389,7 +532,10 @@ function registerReceiver(socket: Socket, data: ReceiverRegistration) {
     existing.disconnectedAt = null;
     existing.label = displayLabel;
   } else {
-    receivers.set(receiverId, createDefaultState(receiverId, displayLabel, socket.id));
+    receivers.set(
+      receiverId,
+      createDefaultState(receiverId, displayLabel, socket.id)
+    );
   }
 
   socket.join(`receiver:${receiverId}`);
@@ -401,7 +547,7 @@ function handleDisconnect(socket: Socket) {
   controllers.delete(socket.id);
   unities.delete(socket.id);
 
-  receivers.forEach((state) => {
+  receivers.forEach(state => {
     if (state.socketId === socket.id) {
       state.connected = false;
       state.disconnectedAt = Date.now();
@@ -453,7 +599,9 @@ export function initWebSocket(httpServer: HttpServer): Server {
       }
 
       const receiverId =
-        typeof socket.data.receiverId === "string" ? socket.data.receiverId : null;
+        typeof socket.data.receiverId === "string"
+          ? socket.data.receiverId
+          : null;
       if (!receiverId) {
         return;
       }
@@ -465,7 +613,7 @@ export function initWebSocket(httpServer: HttpServer): Server {
     });
 
     socket.on(WS_EVENTS.CONTROL_MESSAGE, (input: ControlInputMessage) => {
-      if (!canSendControlCommands(socket.id)) {
+      if (!canSendControlCommands(socket, input)) {
         console.warn(`[WS] Ignored control message from ${socket.id}`);
         return;
       }
@@ -527,7 +675,9 @@ export function dispatchControlMessage(
           incrementConfigVersion(state);
         }
 
-        io!.to(`receiver:${receiverId}`).emit(WS_EVENTS.RECEIVER_COMMAND, command);
+        io!
+          .to(`receiver:${receiverId}`)
+          .emit(WS_EVENTS.RECEIVER_COMMAND, command);
         emitReceiverStateToRoom(receiverId, state);
         return receiverId;
       }
@@ -557,7 +707,10 @@ export function dispatchControlMessage(
     incrementConfigVersion(state);
   }
 
-  io.to(`receiver:${command.targetId}`).emit(WS_EVENTS.RECEIVER_COMMAND, command);
+  io.to(`receiver:${command.targetId}`).emit(
+    WS_EVENTS.RECEIVER_COMMAND,
+    command
+  );
   emitReceiverStateToRoom(command.targetId, state);
   broadcastReceiverList();
 
@@ -592,7 +745,7 @@ export async function resetWebSocketState() {
   if (io) {
     const activeIo = io;
     io = null;
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
       activeIo.close(() => resolve());
     });
   }

@@ -20,6 +20,7 @@ import {
 const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
   "set_track_state",
   "remove_track",
+  "remove_group",
   "set_group_state",
   "set_module_state",
   "set_vote_state",
@@ -85,7 +86,9 @@ function normalizeLegacyPayload(
   }
 }
 
-function normalizeLegacyControlMessage(body: JsonRecord): ControlMessage | null {
+function normalizeLegacyControlMessage(
+  body: JsonRecord
+): ControlMessage | null {
   if (!isLegacyMessageType(body.type)) {
     return null;
   }
@@ -133,12 +136,14 @@ function normalizeVoteConfig(value: unknown): VoteConfig | null {
         (option): option is { id: string; label: string } =>
           typeof option.id === "string" && typeof option.label === "string"
       )
-      .map((option) => ({
+      .map(option => ({
         id: option.id,
         label: option.label,
       })),
     selectedOptionId:
-      typeof value.selectedOptionId === "string" ? value.selectedOptionId : null,
+      typeof value.selectedOptionId === "string"
+        ? value.selectedOptionId
+        : null,
   };
 }
 
@@ -189,6 +194,20 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
         timestamp,
       };
     }
+    case "remove_group": {
+      if (!isRecord(body.payload) || typeof body.payload.groupId !== "string") {
+        return null;
+      }
+
+      return {
+        command: "remove_group",
+        targetId: body.targetId.trim(),
+        payload: {
+          groupId: body.payload.groupId,
+        },
+        timestamp,
+      };
+    }
     case "set_group_state": {
       if (!isRecord(body.payload) || typeof body.payload.groupId !== "string") {
         return null;
@@ -230,7 +249,9 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
       }
 
       const vote =
-        body.payload.vote === null ? null : normalizeVoteConfig(body.payload.vote);
+        body.payload.vote === null
+          ? null
+          : normalizeVoteConfig(body.payload.vote);
       if (body.payload.vote !== null && !vote) {
         return null;
       }

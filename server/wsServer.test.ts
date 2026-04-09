@@ -3,8 +3,10 @@ import {
   AUDIO_URLS,
   CONFIG_TTL_MS,
   createDefaultReceiverConfig,
+  legacyTrackIdToTrackKey,
   legacyControlMessageToUnifiedCommand,
   type LegacyControlMessage,
+  trackKeyToLegacyTrackId,
   WS_EVENTS,
 } from "../shared/wsTypes";
 
@@ -29,7 +31,14 @@ describe("Phase 1 shared protocol", () => {
       label: "Boing",
       playing: false,
       playable: true,
+      loopEnabled: false,
+      loopControlVisible: true,
+      loopControlLocked: false,
+      volumeValue: 1,
+      volumeControlVisible: false,
+      volumeControlEnabled: true,
     });
+    expect(config.groups).toEqual([]);
     expect(config.visuals).toMatchObject({
       visible: true,
       enabled: true,
@@ -86,5 +95,35 @@ describe("Phase 1 shared protocol", () => {
       },
       timestamp: "2026-04-03T10:00:01.000Z",
     });
+
+    const legacyPlayableMessage: LegacyControlMessage = {
+      type: "audio_playable",
+      targetId: "receiver-a",
+      payload: { trackId: 2, playable: false },
+      timestamp: "2026-04-03T10:00:02.000Z",
+    };
+
+    expect(legacyControlMessageToUnifiedCommand(legacyPlayableMessage)).toEqual(
+      {
+        command: "set_track_state",
+        targetId: "receiver-a",
+        payload: {
+          trackId: "track_02",
+          patch: {
+            playable: false,
+            playing: false,
+          },
+        },
+        timestamp: "2026-04-03T10:00:02.000Z",
+      }
+    );
+  });
+
+  it("keeps legacy track id helpers in sync", () => {
+    expect(legacyTrackIdToTrackKey(1)).toBe("track_01");
+    expect(legacyTrackIdToTrackKey(2)).toBe("track_02");
+    expect(trackKeyToLegacyTrackId("track_01")).toBe(1);
+    expect(trackKeyToLegacyTrackId("track_02")).toBe(2);
+    expect(trackKeyToLegacyTrackId("ambient_loop")).toBeNull();
   });
 });

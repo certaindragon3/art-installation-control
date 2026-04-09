@@ -147,6 +147,10 @@ export interface RemoveTrackPayload {
   trackId: string;
 }
 
+export interface RemoveGroupPayload {
+  groupId: string;
+}
+
 export interface SetGroupStatePayload {
   groupId: string;
   patch: Partial<GroupState>;
@@ -174,6 +178,12 @@ export type UnifiedCommand =
       command: "remove_track";
       targetId: string;
       payload: RemoveTrackPayload;
+      timestamp: string;
+    }
+  | {
+      command: "remove_group";
+      targetId: string;
+      payload: RemoveGroupPayload;
       timestamp: string;
     }
   | {
@@ -293,7 +303,7 @@ export const AUDIO_URLS = DEFAULT_TRACK_LIBRARY.reduce<Record<string, string>>(
 );
 
 export function createDefaultTracks(): TrackState[] {
-  return DEFAULT_TRACK_LIBRARY.map((track) => ({
+  return DEFAULT_TRACK_LIBRARY.map(track => ({
     ...track,
     visible: true,
     enabled: true,

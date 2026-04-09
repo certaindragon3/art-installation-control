@@ -47,15 +47,15 @@ interface GroupState {
 
 ## 验收标准
 
-- [ ] Loop 按钮可开/关，默认关闭
-- [ ] Loop 锁定状态下用户无法操作
-- [ ] 动态创建/删除/重命名 group
-- [ ] Track 可在 group 间移动
-- [ ] Group dropdown UI 正确展示，受限时灰化
-- [ ] Volume 弹出式 UI，对数映射
-- [ ] 点击 volume 外部区域停止播放并关闭 volume
-- [ ] Volume 交互发送 startInteraction / endInteraction 到 Unity
-- [ ] Unity 可远程控制所有上述状态
+- [x] Loop 按钮可开/关，默认关闭
+- [x] Loop 锁定状态下用户无法操作
+- [x] 动态创建/删除/重命名 group
+- [x] Track 可在 group 间移动
+- [x] Group dropdown UI 正确展示，受限时灰化
+- [x] Volume 弹出式 UI，对数映射
+- [x] 点击 volume 外部区域停止播放并关闭 volume
+- [x] Volume 交互发送 startInteraction / endInteraction 到 Unity
+- [x] Unity 可远程控制所有上述状态
 
 ## 测试建议（无 Unity 客户端）
 

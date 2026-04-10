@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentPropsWithoutRef,
+} from "react";
 import { ClassroomMap } from "@/components/ClassroomMap";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +95,82 @@ const PRESET_COLORS = [
 const UNGROUPED_GROUP_VALUE = "__ungrouped__";
 const MAP_SCALE_MAX = 100;
 const MAP_SCALE_STEP = 0.1;
+
+type NumericInputProps = Omit<
+  ComponentPropsWithoutRef<typeof Input>,
+  "type" | "value" | "onChange"
+> & {
+  value: number;
+  onValueChange: (value: number) => void;
+  formatValue?: (value: number) => string;
+};
+
+function NumericInput({
+  value,
+  onValueChange,
+  formatValue = nextValue => String(nextValue),
+  onFocus,
+  onBlur,
+  ...props
+}: NumericInputProps) {
+  const [draftValue, setDraftValue] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (focused) {
+      return;
+    }
+
+    setDraftValue(null);
+  }, [focused, value]);
+
+  return (
+    <Input
+      {...props}
+      type="number"
+      value={draftValue ?? formatValue(value)}
+      onFocus={event => {
+        setFocused(true);
+        setDraftValue(current => current ?? formatValue(value));
+        onFocus?.(event);
+      }}
+      onBlur={event => {
+        setFocused(false);
+        setDraftValue(current => {
+          if (current === null) {
+            return null;
+          }
+
+          const parsed = Number(current);
+          if (!Number.isFinite(parsed) || parsed === value) {
+            return null;
+          }
+
+          return current;
+        });
+        onBlur?.(event);
+      }}
+      onChange={event => {
+        const nextValue = event.target.value;
+        setDraftValue(nextValue);
+
+        if (
+          nextValue === "" ||
+          nextValue === "-" ||
+          nextValue === "." ||
+          nextValue === "-."
+        ) {
+          return;
+        }
+
+        const parsed = Number(nextValue);
+        if (Number.isFinite(parsed)) {
+          onValueChange(parsed);
+        }
+      }}
+    />
+  );
+}
 
 function mapXNormalizedToScale(value: number) {
   return clampNormalizedCoordinate(value, 0.5) * MAP_SCALE_MAX;
@@ -1092,9 +1174,8 @@ export default function Controller() {
                                 <Minus data-icon="inline-start" />
                                 Decrement
                               </Button>
-                              <Input
+                              <NumericInput
                                 id="score-value"
-                                type="number"
                                 step="any"
                                 value={selectedScore?.value ?? 0}
                                 className="max-w-48"
@@ -1112,9 +1193,9 @@ export default function Controller() {
                                     receiverId: selectedReceiver.receiverId,
                                   })
                                 }
-                                onChange={event =>
+                                onValueChange={value =>
                                   patchScore({
-                                    value: Number(event.target.value) || 0,
+                                    value,
                                   })
                                 }
                               />
@@ -1265,9 +1346,8 @@ export default function Controller() {
                                   });
                                 }}
                               />
-                              <Input
+                              <NumericInput
                                 id="map-x-position"
-                                type="number"
                                 min={0}
                                 max={MAP_SCALE_MAX}
                                 step={MAP_SCALE_STEP}
@@ -1289,11 +1369,9 @@ export default function Controller() {
                                     receiverId: selectedReceiver.receiverId,
                                   })
                                 }
-                                onChange={event =>
+                                onValueChange={value =>
                                   patchMap({
-                                    playerPosX: mapXScaleToNormalized(
-                                      Number(event.target.value) || 0
-                                    ),
+                                    playerPosX: mapXScaleToNormalized(value),
                                   })
                                 }
                               />
@@ -1351,9 +1429,8 @@ export default function Controller() {
                                   });
                                 }}
                               />
-                              <Input
+                              <NumericInput
                                 id="map-y-position"
-                                type="number"
                                 min={0}
                                 max={MAP_SCALE_MAX}
                                 step={MAP_SCALE_STEP}
@@ -1375,11 +1452,9 @@ export default function Controller() {
                                     receiverId: selectedReceiver.receiverId,
                                   })
                                 }
-                                onChange={event =>
+                                onValueChange={value =>
                                   patchMap({
-                                    playerPosY: mapYScaleToNormalized(
-                                      Number(event.target.value) || 0
-                                    ),
+                                    playerPosY: mapYScaleToNormalized(value),
                                   })
                                 }
                               />
@@ -1572,9 +1647,8 @@ export default function Controller() {
                                   });
                                 }}
                               />
-                              <Input
+                              <NumericInput
                                 id="timing-target-center"
-                                type="number"
                                 min={0}
                                 max={1}
                                 step={0.01}
@@ -1596,10 +1670,9 @@ export default function Controller() {
                                     receiverId: selectedReceiver.receiverId,
                                   })
                                 }
-                                onChange={event =>
+                                onValueChange={value =>
                                   patchTiming({
-                                    targetCenter:
-                                      Number(event.target.value) || 0,
+                                    targetCenter: value,
                                   })
                                 }
                               />
@@ -1650,9 +1723,8 @@ export default function Controller() {
                                   });
                                 }}
                               />
-                              <Input
+                              <NumericInput
                                 id="timing-tolerance"
-                                type="number"
                                 min={0}
                                 max={0.5}
                                 step={0.01}
@@ -1674,10 +1746,9 @@ export default function Controller() {
                                     receiverId: selectedReceiver.receiverId,
                                   })
                                 }
-                                onChange={event =>
+                                onValueChange={value =>
                                   patchTiming({
-                                    timingTolerance:
-                                      Number(event.target.value) || 0,
+                                    timingTolerance: value,
                                   })
                                 }
                               />
@@ -1850,16 +1921,11 @@ export default function Controller() {
                             Visibility (s)
                           </FieldLabel>
                           <FieldContent>
-                            <Input
+                            <NumericInput
                               id="vote-duration"
-                              type="number"
                               min={0}
                               value={voteVisibilityDuration}
-                              onChange={event =>
-                                setVoteVisibilityDuration(
-                                  Number(event.target.value) || 0
-                                )
-                              }
+                              onValueChange={setVoteVisibilityDuration}
                             />
                           </FieldContent>
                         </Field>
@@ -2116,15 +2182,14 @@ export default function Controller() {
                               });
                             }}
                           />
-                          <Input
-                            type="number"
+                          <NumericInput
                             min={30}
                             max={240}
                             value={selectedPulse?.bpm ?? 90}
                             className="w-24"
-                            onChange={event =>
+                            onValueChange={value =>
                               patchPulse({
-                                bpm: Number(event.target.value),
+                                bpm: value,
                                 enabled: true,
                               })
                             }
@@ -2933,16 +2998,15 @@ function TrackControlCard({
                 });
               }}
             />
-            <Input
-              type="number"
+            <NumericInput
               min={0.1}
               max={8}
               step={0.1}
               className="w-24"
               value={track.fillTime}
-              onChange={event =>
+              onValueChange={value =>
                 onTrackPatch(track.trackId, {
-                  fillTime: Number(event.target.value),
+                  fillTime: value,
                 })
               }
             />

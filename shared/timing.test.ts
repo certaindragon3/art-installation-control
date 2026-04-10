@@ -74,4 +74,25 @@ describe("timing helpers", () => {
       pulseActive: false,
     });
   });
+
+  it("keeps looping across multiple beat intervals instead of sticking at 1", () => {
+    expect(
+      evaluateTimingPress({
+        pulseEnabled: true,
+        pulseEvent: {
+          intervalMs: 1_000,
+          sequence: 12,
+          timestamp: 3_000,
+        },
+        nowMs: 5_350,
+        targetCenter: 0.5,
+        timingTolerance: 0.08,
+      })
+    ).toMatchObject({
+      timingValue: 0.35,
+      pulseSequence: 12,
+      pulseIntervalMs: 1_000,
+      pulseActive: true,
+    });
+  });
 });

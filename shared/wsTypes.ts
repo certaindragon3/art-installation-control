@@ -421,7 +421,11 @@ export function resolveTimingValue(input: {
   }
 
   const elapsed = Math.max(0, (input.nowMs ?? 0) - input.pulseEvent.timestamp);
-  return clampNormalizedCoordinate(elapsed / input.pulseEvent.intervalMs, 0);
+  const loopedElapsed = elapsed % input.pulseEvent.intervalMs;
+  return clampNormalizedCoordinate(
+    loopedElapsed / input.pulseEvent.intervalMs,
+    0
+  );
 }
 
 export function evaluateTimingPress(input: {

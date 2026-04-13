@@ -2,6 +2,8 @@
 
 Short copy-paste commands for testing the current workflow without using the web controller UI.
 
+Polling/voting-specific payloads are in [`polling-system-payloads.md`](./polling-system-payloads.md).
+
 ## Current Note
 
 The current `timing challenge` is based on the shared server pulse clock.

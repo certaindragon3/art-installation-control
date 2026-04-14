@@ -17,20 +17,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
@@ -125,9 +116,6 @@ export default function Receiver() {
 
   const audioMapRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const [messageFlash, setMessageFlash] = useState(false);
-  const [selectedTrackByGroup, setSelectedTrackByGroup] = useState<
-    Record<string, string>
-  >({});
   const [optimisticVoteSelection, setOptimisticVoteSelection] = useState<{
     voteId: string;
     selectedOptionId: string;
@@ -300,45 +288,6 @@ export default function Receiver() {
     () => config.tracks.filter(track => track.visible),
     [config.tracks]
   );
-  const visibleGroups = useMemo(
-    () => config.groups.filter(group => group.visible),
-    [config.groups]
-  );
-
-  const groupTrackMap = useMemo(() => {
-    const trackMap = new Map<string, TrackState>();
-    visibleTracks.forEach(track => {
-      trackMap.set(track.trackId, track);
-    });
-
-    return visibleGroups.reduce<Record<string, TrackState[]>>((acc, group) => {
-      acc[group.groupId] = group.trackIds
-        .map(trackId => trackMap.get(trackId))
-        .filter((track): track is TrackState => Boolean(track));
-      return acc;
-    }, {});
-  }, [visibleGroups, visibleTracks]);
-
-  const hiddenOrMissingGroupIds = useMemo(() => {
-    const ids = new Set<string>();
-    config.groups.forEach(group => {
-      if (!group.visible) {
-        ids.add(group.groupId);
-      }
-    });
-    return ids;
-  }, [config.groups]);
-
-  const ungroupedTracks = useMemo(
-    () =>
-      visibleTracks.filter(
-        track =>
-          !track.groupId ||
-          (!groupTrackMap[track.groupId] &&
-            !hiddenOrMissingGroupIds.has(track.groupId))
-      ),
-    [groupTrackMap, hiddenOrMissingGroupIds, visibleTracks]
-  );
 
   const pulsePhase = useMemo(() => {
     if (!pulseEnabled || !pulseEvent) {
@@ -348,39 +297,6 @@ export default function Receiver() {
     const elapsed = Math.max(0, nowMs - pulseEvent.timestamp);
     return Math.min(100, (elapsed / pulseEvent.intervalMs) * 100);
   }, [nowMs, pulseEnabled, pulseEvent]);
-
-  useEffect(() => {
-    setSelectedTrackByGroup(current => {
-      const next = { ...current };
-
-      visibleGroups.forEach(group => {
-        const tracks = groupTrackMap[group.groupId] ?? [];
-        if (tracks.length === 0) {
-          delete next[group.groupId];
-          return;
-        }
-
-        const currentTrackId = current[group.groupId];
-        if (
-          currentTrackId &&
-          tracks.some(track => track.trackId === currentTrackId)
-        ) {
-          return;
-        }
-
-        next[group.groupId] =
-          tracks.find(track => track.playing)?.trackId ?? tracks[0].trackId;
-      });
-
-      Object.keys(next).forEach(groupId => {
-        if (!visibleGroups.some(group => group.groupId === groupId)) {
-          delete next[groupId];
-        }
-      });
-
-      return next;
-    });
-  }, [groupTrackMap, visibleGroups]);
 
   useEffect(() => {
     if (!activeVolumeTrackId) {
@@ -492,21 +408,6 @@ export default function Receiver() {
       dispatchTrackPatch(track.trackId, { volumeValue: value });
     },
     [dispatchTrackPatch]
-  );
-
-  const handleGroupSelection = useCallback(
-    (groupId: string, trackId: string) => {
-      setSelectedTrackByGroup(current => ({
-        ...current,
-        [groupId]: trackId,
-      }));
-      postDiscreteInteraction({
-        action: "selectGroupTrack",
-        element: `group:${groupId}:dropdown`,
-        value: trackId,
-      });
-    },
-    [postDiscreteInteraction]
   );
 
   const handleVoteSelection = useCallback(
@@ -969,132 +870,19 @@ export default function Receiver() {
               </Card>
             ) : null}
 
-            {visibleGroups.length > 0 ? (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Music />
-                    Sample Groups
-                  </CardTitle>
-                  <CardDescription>
-                    Group dropdowns stay dynamic while track markers continue to
-                    sync to the shared beat.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {visibleGroups.map(group => {
-                    const tracks = groupTrackMap[group.groupId] ?? [];
-                    const selectedTrackId = selectedTrackByGroup[group.groupId];
-                    const selectedTrack =
-                      tracks.find(track => track.trackId === selectedTrackId) ??
-                      tracks[0];
-
-                    if (!selectedTrack) {
-                      return null;
-                    }
-
-                    return (
-                      <div
-                        key={group.groupId}
-                        className={cn(
-                          "rounded-2xl border p-4 transition-colors",
-                          group.enabled
-                            ? "bg-muted/30"
-                            : "bg-muted/15 opacity-70"
-                        )}
-                        style={{ borderColor: `${group.color}55` }}
-                      >
-                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="size-2.5 rounded-full"
-                                style={{ backgroundColor: group.color }}
-                              />
-                              <span className="font-medium">{group.label}</span>
-                              <Badge
-                                variant={
-                                  group.enabled ? "secondary" : "outline"
-                                }
-                              >
-                                {group.enabled ? "Enabled" : "Locked"}
-                              </Badge>
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {tracks.length} track option
-                              {tracks.length === 1 ? "" : "s"}
-                            </p>
-                          </div>
-
-                          <div className="w-full md:max-w-xs">
-                            <Label className="sr-only">Choose track</Label>
-                            <Select
-                              value={selectedTrack.trackId}
-                              onValueChange={value =>
-                                handleGroupSelection(group.groupId, value)
-                              }
-                              disabled={!group.enabled}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Choose a track" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectGroup>
-                                  {tracks.map(track => (
-                                    <SelectItem
-                                      key={track.trackId}
-                                      value={track.trackId}
-                                    >
-                                      {track.label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectGroup>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-
-                        <Separator className="my-4" />
-
-                        <ReceiverTrackCard
-                          track={selectedTrack}
-                          disabled={!group.enabled}
-                          activeVolumeTrackId={activeVolumeTrackId}
-                          onPlayToggle={handlePlayToggle}
-                          onLoopToggle={handleLoopToggle}
-                          onVolumeChange={handleVolumeChange}
-                          onVolumeDismiss={handleVolumeDismiss}
-                          onVolumeOpen={trackId =>
-                            setActiveVolumeTrackId(trackId)
-                          }
-                          nowMs={nowMs}
-                          pulseEvent={pulseEvent}
-                          beginContinuousInteraction={
-                            beginContinuousInteraction
-                          }
-                          endContinuousInteraction={endContinuousInteraction}
-                        />
-                      </div>
-                    );
-                  })}
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {ungroupedTracks.length > 0 ? (
+            {visibleTracks.length > 0 ? (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-base">
                     <AudioLines />
-                    Direct Tracks
+                    Tracks
                   </CardTitle>
                   <CardDescription>
-                    Tracks without a visible group remain directly playable and
-                    keep their own fill markers.
+                    Only tracks selected by the controller are available here.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 lg:grid-cols-2">
-                  {ungroupedTracks.map(track => (
+                  {visibleTracks.map(track => (
                     <ReceiverTrackCard
                       key={track.trackId}
                       track={track}
@@ -1113,7 +901,19 @@ export default function Receiver() {
                   ))}
                 </CardContent>
               </Card>
-            ) : null}
+            ) : (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Music />
+                    Tracks
+                  </CardTitle>
+                  <CardDescription>
+                    No tracks are currently available.
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            )}
 
             <Card>
               <CardHeader className="pb-3">

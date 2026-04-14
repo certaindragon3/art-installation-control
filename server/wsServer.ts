@@ -22,6 +22,7 @@ import {
   type SetGroupStatePayload,
   type SetModuleStatePayload,
   type SetTrackStatePayload,
+  type SetVisibleTracksPayload,
   type SubmitVotePayload,
   type TimingEventExport,
   type TimingExport,
@@ -742,6 +743,30 @@ function applyTrackPatch(
   return true;
 }
 
+function applyVisibleTracks(
+  state: InternalReceiverState,
+  payload: SetVisibleTracksPayload
+) {
+  const visibleTrackIds = new Set(payload.trackIds);
+  let changed = false;
+
+  state.config.tracks.forEach(track => {
+    const nextVisible = visibleTrackIds.has(track.trackId);
+
+    if (track.visible !== nextVisible) {
+      track.visible = nextVisible;
+      changed = true;
+    }
+
+    if (!nextVisible && track.playing) {
+      track.playing = false;
+      changed = true;
+    }
+  });
+
+  return changed;
+}
+
 function removeTrack(
   state: InternalReceiverState,
   payload: RemoveTrackPayload
@@ -1020,6 +1045,8 @@ function applyCommand(
   switch (command.command) {
     case "set_track_state":
       return applyTrackPatch(state, command.payload);
+    case "set_visible_tracks":
+      return applyVisibleTracks(state, command.payload);
     case "remove_track":
       return removeTrack(state, command.payload);
     case "remove_group":

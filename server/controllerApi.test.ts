@@ -1248,6 +1248,116 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("sets the visible track array and stops hidden tracks", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Main Screen",
+    });
+    await initialStatePromise;
+
+    const playingStatePromise = waitForEvent<{
+      configVersion: number;
+      config: { tracks: Array<{ trackId: string; playing: boolean }> };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const playResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_track_state",
+        targetId: "screen-a",
+        payload: {
+          trackId: "track_02",
+          patch: {
+            playing: true,
+          },
+        },
+      }),
+    });
+
+    expect(playResponse.status).toBe(200);
+    expect(await playingStatePromise).toMatchObject({
+      configVersion: 2,
+      config: {
+        tracks: expect.arrayContaining([
+          expect.objectContaining({
+            trackId: "track_02",
+            playing: true,
+          }),
+        ]),
+      },
+    });
+
+    const commandPromise = waitForEvent<{
+      command: string;
+      payload: { trackIds: string[] };
+    }>(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const visibleStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        tracks: Array<{
+          trackId: string;
+          visible: boolean;
+          playing: boolean;
+        }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const visibleResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_visible_tracks",
+        targetId: "screen-a",
+        payload: {
+          trackIds: ["track_01", " track_01 ", "track_02_missing"],
+        },
+      }),
+    });
+    const visibleBody = await visibleResponse.json();
+
+    expect(visibleResponse.status).toBe(200);
+    expect(visibleBody.command).toMatchObject({
+      command: "set_visible_tracks",
+      payload: {
+        trackIds: ["track_01", "track_02_missing"],
+      },
+    });
+    expect(await commandPromise).toMatchObject({
+      command: "set_visible_tracks",
+      payload: {
+        trackIds: ["track_01", "track_02_missing"],
+      },
+    });
+    expect(await visibleStatePromise).toMatchObject({
+      configVersion: 3,
+      config: {
+        tracks: expect.arrayContaining([
+          expect.objectContaining({
+            trackId: "track_01",
+            visible: true,
+          }),
+          expect.objectContaining({
+            trackId: "track_02",
+            visible: false,
+            playing: false,
+          }),
+        ]),
+      },
+    });
+  });
+
   it("accepts receiver-scoped phase 2 track updates over websocket", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);

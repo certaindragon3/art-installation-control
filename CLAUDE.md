@@ -63,6 +63,7 @@ pnpm vitest run server/wsServer.test.ts
   - `phase5_scoring_map/` — Phase 5: 计分 + 教室地图
   - `phase6_timing/` — Phase 6: Timing Challenge Mode
   - `phase7_optional/` — Phase 7: 可选功能（Filter, Recording）
+  - `phase8_professor_feedback/` — Phase 8: 教授反馈后的交付收口（voting、120 音频文件 workflow、去 group、slim interface）
 
 ### 路径别名
 
@@ -109,12 +110,13 @@ Receiver (浏览器)
 
 项目按 Phase（Epic）分阶段推进，每个 phase 的设计文档在 `docs/phase{N}_xxx/epic.md`。
 
-**开发顺序：Phase 1 → 2 → 3 → 4 → 5 → 6 → 7（可选）**
+**当前开发顺序：Phase 1 → 2 → 3 → 4 → 5 → 6 → 8（教授反馈收口）**
 
 - Phase 1 是所有后续 phase 的基础，必须先完成
 - Phase 2/3/4/5 互相独立，完成 Phase 1 后可并行
 - Phase 6 依赖 Phase 3（pulse sync）
-- Phase 7 为导师标注的 OPTIONAL / SUPER OPTIONAL 功能，排在最后
+- Phase 7 为导师标注的 OPTIONAL / SUPER OPTIONAL 功能；根据教授最新反馈，当前明确 deferred，不作为 next step
+- Phase 8 是当前最高优先级：先完成 voting 交付验证，再处理 120 音频文件自动 control string workflow，并用 visible track array 替代 group-based 操作流
 
 **每完成一个 phase：**
 1. 确保类型检查 (`pnpm check`) 和测试 (`pnpm test`) 通过

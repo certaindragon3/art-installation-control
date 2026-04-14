@@ -21,6 +21,7 @@ import {
 
 const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
   "set_track_state",
+  "set_visible_tracks",
   "remove_track",
   "remove_group",
   "set_group_state",
@@ -262,6 +263,28 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
         payload: {
           trackId: body.payload.trackId,
           patch: isRecord(body.payload.patch) ? body.payload.patch : {},
+        },
+        timestamp,
+      };
+    }
+    case "set_visible_tracks": {
+      if (!isRecord(body.payload) || !Array.isArray(body.payload.trackIds)) {
+        return null;
+      }
+
+      const trackIds = Array.from(
+        new Set(
+          body.payload.trackIds
+            .map(trackId => (typeof trackId === "string" ? trackId.trim() : ""))
+            .filter(trackId => trackId.length > 0)
+        )
+      );
+
+      return {
+        command: "set_visible_tracks",
+        targetId: body.targetId.trim(),
+        payload: {
+          trackIds,
         },
         timestamp,
       };

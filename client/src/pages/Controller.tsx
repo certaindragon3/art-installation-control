@@ -15,6 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Empty,
   EmptyDescription,
@@ -40,6 +41,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,7 +49,6 @@ import { usePostToUnity } from "@/hooks/usePostToUnity";
 import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import type {
-  GroupState,
   MapConfig,
   ReceiverState,
   ScoreConfig,
@@ -92,7 +93,6 @@ const PRESET_COLORS = [
   "#111827",
 ];
 
-const UNGROUPED_GROUP_VALUE = "__ungrouped__";
 const MAP_SCALE_MAX = 100;
 const MAP_SCALE_STEP = 0.1;
 
@@ -188,7 +188,7 @@ function mapYScaleToNormalized(value: number) {
   return 1 - clampNormalizedCoordinate(value / MAP_SCALE_MAX, 0.5);
 }
 
-function createMachineId(prefix: "track" | "group" | "vote", label: string) {
+function createMachineId(prefix: "track" | "vote", label: string) {
   const normalized = label
     .toLowerCase()
     .trim()
@@ -196,10 +196,6 @@ function createMachineId(prefix: "track" | "group" | "vote", label: string) {
     .replace(/^_+|_+$/g, "");
 
   return `${prefix}_${normalized || prefix}_${Date.now().toString(36)}`;
-}
-
-function groupSelectValue(groupId: string | null) {
-  return groupId ?? UNGROUPED_GROUP_VALUE;
 }
 
 export default function Controller() {
@@ -226,8 +222,6 @@ export default function Controller() {
   const [customColor, setCustomColor] = useState("#6366f1");
   const [newTrackLabel, setNewTrackLabel] = useState("");
   const [newTrackUrl, setNewTrackUrl] = useState("");
-  const [newGroupLabel, setNewGroupLabel] = useState("");
-  const [newGroupColor, setNewGroupColor] = useState("#f97316");
   const [voteQuestionInput, setVoteQuestionInput] = useState(
     "Which rule should be active next?"
   );
@@ -275,10 +269,6 @@ export default function Controller() {
     setCustomColor(selectedReceiver.config.visuals.iconColor);
   }, [selectedReceiver]);
 
-  const selectedGroups = useMemo(
-    () => selectedReceiver?.config.groups ?? [],
-    [selectedReceiver]
-  );
   const selectedPulse = useMemo(
     () => selectedReceiver?.config.pulse ?? null,
     [selectedReceiver]
@@ -356,24 +346,6 @@ export default function Controller() {
         targetId: selectedReceiver.receiverId,
         payload: {
           trackId,
-          patch,
-        },
-      });
-    },
-    [dispatchCommand, selectedReceiver]
-  );
-
-  const patchGroup = useCallback(
-    (groupId: string, patch: Partial<GroupState>) => {
-      if (!selectedReceiver) {
-        return;
-      }
-
-      dispatchCommand({
-        command: "set_group_state",
-        targetId: selectedReceiver.receiverId,
-        payload: {
-          groupId,
           patch,
         },
       });
@@ -520,23 +492,88 @@ export default function Controller() {
     [patchTrack]
   );
 
-  const handleTrackGroupChange = useCallback(
-    (track: TrackState, value: string) => {
+  const applyVisibleTrackIds = useCallback(
+    (targetId: string, trackIds: string[]) => {
+      dispatchCommand({
+        command: "set_visible_tracks",
+        targetId,
+        payload: {
+          trackIds,
+        },
+      });
+    },
+    [dispatchCommand]
+  );
+
+  const handleVisibleTrackChange = useCallback(
+    (trackId: string, visible: boolean) => {
       if (!selectedReceiver) {
         return;
       }
 
-      const groupId = value === UNGROUPED_GROUP_VALUE ? null : value;
-      patchTrack(track.trackId, { groupId });
+      const nextTrackIds = selectedReceiver.config.tracks
+        .filter(track =>
+          track.trackId === trackId ? visible : track.visible
+        )
+        .map(track => track.trackId);
+
+      applyVisibleTrackIds(selectedReceiver.receiverId, nextTrackIds);
       postDiscreteInteraction({
-        action: "assignGroup",
-        element: `track:${track.trackId}:group`,
-        value: groupId,
+        action: "setVisibleTracks",
+        element: "tracks:visible",
+        value: nextTrackIds,
         receiverId: selectedReceiver.receiverId,
       });
     },
-    [patchTrack, postDiscreteInteraction, selectedReceiver]
+    [applyVisibleTrackIds, postDiscreteInteraction, selectedReceiver]
   );
+
+  const handleShowAllTracks = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    const trackIds = selectedReceiver.config.tracks.map(track => track.trackId);
+    applyVisibleTrackIds(selectedReceiver.receiverId, trackIds);
+    postDiscreteInteraction({
+      action: "showAllTracks",
+      element: "tracks:visible",
+      value: trackIds,
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [applyVisibleTrackIds, postDiscreteInteraction, selectedReceiver]);
+
+  const handleHideAllTracks = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    applyVisibleTrackIds(selectedReceiver.receiverId, []);
+    postDiscreteInteraction({
+      action: "hideAllTracks",
+      element: "tracks:visible",
+      value: [],
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [applyVisibleTrackIds, postDiscreteInteraction, selectedReceiver]);
+
+  const handleBroadcastVisibleTracks = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    const trackIds = selectedReceiver.config.tracks
+      .filter(track => track.visible)
+      .map(track => track.trackId);
+
+    applyVisibleTrackIds("*", trackIds);
+    postDiscreteInteraction({
+      action: "broadcastVisibleTracks",
+      element: "tracks:visible",
+      value: trackIds,
+      receiverId: null,
+    });
+  }, [applyVisibleTrackIds, postDiscreteInteraction, selectedReceiver]);
 
   const handleTrackRemove = useCallback(
     (track: TrackState) => {
@@ -614,71 +651,6 @@ export default function Controller() {
     postDiscreteInteraction,
     selectedReceiver,
   ]);
-
-  const handleGroupCreate = useCallback(() => {
-    if (!selectedReceiver) {
-      return;
-    }
-
-    const label = newGroupLabel.trim();
-    if (!label) {
-      return;
-    }
-
-    const groupId = createMachineId("group", label);
-    dispatchCommand({
-      command: "set_group_state",
-      targetId: selectedReceiver.receiverId,
-      payload: {
-        groupId,
-        patch: {
-          label,
-          color: newGroupColor,
-          visible: true,
-          enabled: true,
-          trackIds: [],
-        },
-      },
-    });
-
-    postDiscreteInteraction({
-      action: "createGroup",
-      element: "groups:add",
-      value: { groupId, label, color: newGroupColor },
-      receiverId: selectedReceiver.receiverId,
-    });
-
-    setNewGroupLabel("");
-  }, [
-    dispatchCommand,
-    newGroupColor,
-    newGroupLabel,
-    postDiscreteInteraction,
-    selectedReceiver,
-  ]);
-
-  const handleGroupRemove = useCallback(
-    (groupId: string) => {
-      if (!selectedReceiver) {
-        return;
-      }
-
-      dispatchCommand({
-        command: "remove_group",
-        targetId: selectedReceiver.receiverId,
-        payload: {
-          groupId,
-        },
-      });
-      postDiscreteInteraction({
-        action: "removeGroup",
-        element: `group:${groupId}:remove`,
-        value: groupId,
-        receiverId: selectedReceiver.receiverId,
-      });
-    },
-    [dispatchCommand, postDiscreteInteraction, selectedReceiver]
-  );
 
   const handleColorChange = useCallback(
     (color: string, receiverId: string) => {
@@ -2204,116 +2176,92 @@ export default function Controller() {
                   <CardHeader className="pb-3">
                     <CardTitle className="flex items-center gap-2 text-base">
                       <AudioLines />
-                      Group Management
+                      Visible Tracks
                     </CardTitle>
                     <CardDescription>
-                      Create, rename, recolor, hide, disable, and remove dynamic
-                      sample groups.
+                      Choose the track names students can see. Hidden tracks
+                      stop automatically.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
-                      <Field orientation="responsive">
-                        <FieldLabel htmlFor="new-group-label">
-                          Group Label
-                        </FieldLabel>
-                        <FieldContent>
-                          <Input
-                            id="new-group-label"
-                            placeholder="Ambient Cluster"
-                            value={newGroupLabel}
-                            onFocus={() =>
-                              beginContinuousInteraction({
-                                element: "groups:new_label",
-                                startValue: newGroupLabel,
-                                receiverId: selectedReceiver.receiverId,
-                              })
-                            }
-                            onBlur={() =>
-                              endContinuousInteraction({
-                                element: "groups:new_label",
-                                endValue: newGroupLabel,
-                                receiverId: selectedReceiver.receiverId,
-                              })
-                            }
-                            onChange={event =>
-                              setNewGroupLabel(event.target.value)
-                            }
-                          />
-                          <FieldDescription>
-                            Dropdown names stay editable from controller or
-                            Unity.
-                          </FieldDescription>
-                        </FieldContent>
-                      </Field>
-                      <Field orientation="responsive">
-                        <FieldLabel htmlFor="new-group-color">
-                          Group Color
-                        </FieldLabel>
-                        <FieldContent>
-                          <Input
-                            id="new-group-color"
-                            type="color"
-                            value={newGroupColor}
-                            className="h-10 w-24 p-1"
-                            onFocus={() =>
-                              beginContinuousInteraction({
-                                element: "groups:new_color",
-                                startValue: newGroupColor,
-                                receiverId: selectedReceiver.receiverId,
-                              })
-                            }
-                            onBlur={() =>
-                              endContinuousInteraction({
-                                element: "groups:new_color",
-                                endValue: newGroupColor,
-                                receiverId: selectedReceiver.receiverId,
-                              })
-                            }
-                            onChange={event =>
-                              setNewGroupColor(event.target.value)
-                            }
-                          />
-                        </FieldContent>
-                      </Field>
+                  <CardContent className="flex flex-col gap-4">
+                    <div className="flex flex-wrap gap-2">
                       <Button
-                        onClick={handleGroupCreate}
-                        disabled={!newGroupLabel.trim()}
-                        className="self-start"
+                        size="sm"
+                        variant="outline"
+                        onClick={handleShowAllTracks}
                       >
-                        <Plus data-icon="inline-start" />
-                        Add Group
+                        Show All
                       </Button>
-                    </FieldGroup>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleHideAllTracks}
+                      >
+                        Hide All
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleBroadcastVisibleTracks}
+                      >
+                        Broadcast This List
+                      </Button>
+                    </div>
 
-                    {selectedGroups.length === 0 ? (
+                    {selectedReceiver.config.tracks.length === 0 ? (
                       <Empty className="border-border/70 bg-muted/20">
                         <EmptyHeader>
                           <EmptyMedia variant="icon">
                             <AudioLines />
                           </EmptyMedia>
-                          <EmptyTitle>No Groups Configured</EmptyTitle>
+                          <EmptyTitle>No Tracks Configured</EmptyTitle>
                           <EmptyDescription>
-                            Groups remain dynamic. Create one here, then assign
-                            tracks below.
+                            Add audio tracks before choosing the student-facing
+                            list.
                           </EmptyDescription>
                         </EmptyHeader>
                       </Empty>
                     ) : (
-                      selectedGroups.map(group => (
-                        <GroupControlCard
-                          key={group.groupId}
-                          group={group}
-                          onPatch={patchGroup}
-                          onRemove={handleGroupRemove}
-                          postDiscreteInteraction={postDiscreteInteraction}
-                          beginContinuousInteraction={
-                            beginContinuousInteraction
-                          }
-                          endContinuousInteraction={endContinuousInteraction}
-                          receiverId={selectedReceiver.receiverId}
-                        />
-                      ))
+                      <ScrollArea className="h-96 max-h-[70vh] pr-3">
+                        <FieldGroup className="gap-3">
+                          {selectedReceiver.config.tracks.map(track => (
+                            <Field
+                              key={track.trackId}
+                              orientation="horizontal"
+                              className="rounded-xl border border-border/60 bg-muted/30 p-3"
+                            >
+                              <Checkbox
+                                id={`visible-track-${track.trackId}`}
+                                checked={track.visible}
+                                onCheckedChange={checked =>
+                                  handleVisibleTrackChange(
+                                    track.trackId,
+                                    checked === true
+                                  )
+                                }
+                              />
+                              <FieldContent>
+                                <FieldLabel
+                                  htmlFor={`visible-track-${track.trackId}`}
+                                >
+                                  {track.label}
+                                </FieldLabel>
+                                <FieldDescription>
+                                  {track.trackId} ·{" "}
+                                  {track.url || "No audio URL"}
+                                </FieldDescription>
+                              </FieldContent>
+                              <Badge
+                                variant={
+                                  track.visible ? "secondary" : "outline"
+                                }
+                              >
+                                {track.visible ? "Shown" : "Hidden"}
+                              </Badge>
+                            </Field>
+                          ))}
+                        </FieldGroup>
+                      </ScrollArea>
                     )}
                   </CardContent>
                 </Card>
@@ -2325,8 +2273,7 @@ export default function Controller() {
                       Tracks, Markers, and Volume
                     </CardTitle>
                     <CardDescription>
-                      Assign groups, tune tempo markers, and set fill timing
-                      before the receiver animates each track.
+                      Tune tempo markers and playback behavior for each track.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -2403,13 +2350,11 @@ export default function Controller() {
                       <TrackControlCard
                         key={track.trackId}
                         track={track}
-                        groups={selectedGroups}
                         receiverId={selectedReceiver.receiverId}
                         onPlayChange={handleTrackPlayState}
                         onPlayableChange={handleTrackPlayable}
                         onLoopToggle={handleTrackLoopState}
                         onTrackPatch={patchTrack}
-                        onGroupChange={handleTrackGroupChange}
                         onVolumeChange={handleTrackVolumeChange}
                         onRemove={handleTrackRemove}
                         postDiscreteInteraction={postDiscreteInteraction}
@@ -2562,168 +2507,13 @@ export default function Controller() {
   );
 }
 
-function GroupControlCard({
-  group,
-  onPatch,
-  onRemove,
-  postDiscreteInteraction,
-  beginContinuousInteraction,
-  endContinuousInteraction,
-  receiverId,
-}: {
-  group: GroupState;
-  onPatch: (groupId: string, patch: Partial<GroupState>) => void;
-  onRemove: (groupId: string) => void;
-  postDiscreteInteraction: ReturnType<
-    typeof usePostToUnity
-  >["postDiscreteInteraction"];
-  beginContinuousInteraction: ReturnType<
-    typeof usePostToUnity
-  >["beginContinuousInteraction"];
-  endContinuousInteraction: ReturnType<
-    typeof usePostToUnity
-  >["endContinuousInteraction"];
-  receiverId: string;
-}) {
-  return (
-    <div className="rounded-xl border border-border/60 bg-muted/35 p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <span
-              className="size-2.5 rounded-full"
-              style={{ backgroundColor: group.color }}
-            />
-            <span className="font-medium">{group.label}</span>
-            <Badge variant={group.visible ? "secondary" : "outline"}>
-              {group.visible ? "Visible" : "Hidden"}
-            </Badge>
-            <Badge variant={group.enabled ? "secondary" : "outline"}>
-              {group.enabled ? "Enabled" : "Disabled"}
-            </Badge>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {group.groupId} · {group.trackIds.length} assigned track
-            {group.trackIds.length === 1 ? "" : "s"}
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => onRemove(group.groupId)}
-        >
-          <Trash2 data-icon="inline-start" />
-          Remove
-        </Button>
-      </div>
-
-      <Separator className="my-4" />
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor={`group-label-${group.groupId}`}>Label</Label>
-          <Input
-            id={`group-label-${group.groupId}`}
-            value={group.label}
-            onFocus={() =>
-              beginContinuousInteraction({
-                element: `group:${group.groupId}:label`,
-                startValue: group.label,
-                receiverId,
-              })
-            }
-            onBlur={() =>
-              endContinuousInteraction({
-                element: `group:${group.groupId}:label`,
-                endValue: group.label,
-                receiverId,
-              })
-            }
-            onChange={event =>
-              onPatch(group.groupId, { label: event.target.value })
-            }
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor={`group-color-${group.groupId}`}>Color</Label>
-          <Input
-            id={`group-color-${group.groupId}`}
-            type="color"
-            value={group.color}
-            className="h-10 w-24 p-1"
-            onFocus={() =>
-              beginContinuousInteraction({
-                element: `group:${group.groupId}:color`,
-                startValue: group.color,
-                receiverId,
-              })
-            }
-            onBlur={() =>
-              endContinuousInteraction({
-                element: `group:${group.groupId}:color`,
-                endValue: group.color,
-                receiverId,
-              })
-            }
-            onChange={event =>
-              onPatch(group.groupId, { color: event.target.value })
-            }
-          />
-        </div>
-        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
-          <div>
-            <p className="text-sm font-medium">Visible</p>
-            <p className="text-xs text-muted-foreground">
-              Hidden groups disappear from the receiver dropdown.
-            </p>
-          </div>
-          <Switch
-            checked={group.visible}
-            onCheckedChange={checked => {
-              onPatch(group.groupId, { visible: checked });
-              postDiscreteInteraction({
-                action: "toggleGroupVisible",
-                element: `group:${group.groupId}:visible`,
-                value: checked,
-                receiverId,
-              });
-            }}
-          />
-        </div>
-        <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
-          <div>
-            <p className="text-sm font-medium">Enabled</p>
-            <p className="text-xs text-muted-foreground">
-              Disabled groups stay visible but gray out on the receiver.
-            </p>
-          </div>
-          <Switch
-            checked={group.enabled}
-            onCheckedChange={checked => {
-              onPatch(group.groupId, { enabled: checked });
-              postDiscreteInteraction({
-                action: "toggleGroupEnabled",
-                element: `group:${group.groupId}:enabled`,
-                value: checked,
-                receiverId,
-              });
-            }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function TrackControlCard({
   track,
-  groups,
   receiverId,
   onPlayChange,
   onPlayableChange,
   onLoopToggle,
   onTrackPatch,
-  onGroupChange,
   onVolumeChange,
   onRemove,
   postDiscreteInteraction,
@@ -2731,13 +2521,11 @@ function TrackControlCard({
   endContinuousInteraction,
 }: {
   track: TrackState;
-  groups: GroupState[];
   receiverId: string;
   onPlayChange: (track: TrackState, playing: boolean) => void;
   onPlayableChange: (track: TrackState, playable: boolean) => void;
   onLoopToggle: (track: TrackState) => void;
   onTrackPatch: (trackId: string, patch: Partial<TrackState>) => void;
-  onGroupChange: (track: TrackState, value: string) => void;
   onVolumeChange: (track: TrackState, volumeValue: number) => void;
   onRemove: (track: TrackState) => void;
   postDiscreteInteraction: ReturnType<
@@ -2871,28 +2659,6 @@ function TrackControlCard({
               });
             }}
           />
-        </div>
-
-        <div className="space-y-2">
-          <Label>Assigned Group</Label>
-          <Select
-            value={groupSelectValue(track.groupId)}
-            onValueChange={value => onGroupChange(track, value)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Assign a group" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value={UNGROUPED_GROUP_VALUE}>Ungrouped</SelectItem>
-                {groups.map(group => (
-                  <SelectItem key={group.groupId} value={group.groupId}>
-                    {group.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
         </div>
 
         <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
@@ -3095,7 +2861,9 @@ function ReceiverSummaryCard({
       </div>
       <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
         <span>{receiver.config.tracks.length} tracks</span>
-        <span>{receiver.config.groups.length} groups</span>
+        <span>
+          {receiver.config.tracks.filter(track => track.visible).length} shown
+        </span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>Score {receiver.config.score.value}</span>

@@ -6,6 +6,8 @@
  * receiver config snapshots.
  */
 
+import { GENERATED_TRACK_LIBRARY } from "./trackManifest.generated";
+
 export type JsonRecord = Record<string, unknown>;
 
 // ─── Legacy Message Types ─────────────────────────────────────────────
@@ -193,6 +195,10 @@ export interface SetTrackStatePayload {
   patch: Partial<TrackState>;
 }
 
+export interface SetVisibleTracksPayload {
+  trackIds: string[];
+}
+
 export interface RemoveTrackPayload {
   trackId: string;
 }
@@ -231,6 +237,12 @@ export type UnifiedCommand =
       command: "set_track_state";
       targetId: string;
       payload: SetTrackStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "set_visible_tracks";
+      targetId: string;
+      payload: SetVisibleTracksPayload;
       timestamp: string;
     }
   | {
@@ -465,18 +477,8 @@ export interface TrackDefinition {
   url: string;
 }
 
-export const DEFAULT_TRACK_LIBRARY: TrackDefinition[] = [
-  {
-    trackId: "track_01",
-    label: "Boing",
-    url: "/audio/boing.mp3",
-  },
-  {
-    trackId: "track_02",
-    label: "Womp Womp",
-    url: "/audio/womp-womp.mp3",
-  },
-];
+export const DEFAULT_TRACK_LIBRARY: readonly TrackDefinition[] =
+  GENERATED_TRACK_LIBRARY;
 
 export const AUDIO_URLS = DEFAULT_TRACK_LIBRARY.reduce<Record<string, string>>(
   (acc, track) => {

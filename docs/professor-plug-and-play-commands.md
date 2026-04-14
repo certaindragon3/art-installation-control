@@ -304,6 +304,37 @@ curl "$BASE_URL/api/controller/timing/export"
 
 ## 9. Start Or Stop A Track
 
+### Choose Which Tracks Students Can See
+
+This replaces the old group-based workflow. Send the filenames or track IDs that
+should be visible. Every other track is hidden and stopped.
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_visible_tracks",
+    "targetId": "*",
+    "payload": {
+      "trackIds": ["boing.mp3", "womp-womp.mp3"]
+    }
+  }'
+```
+
+For the current legacy demo tracks, `track_01` and `track_02` are still accepted:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_visible_tracks",
+    "targetId": "*",
+    "payload": {
+      "trackIds": ["track_01"]
+    }
+  }'
+```
+
 Play `track_01`:
 
 ```bash

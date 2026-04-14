@@ -155,7 +155,7 @@ interface MapConfig {
 - [x] receiver map marker 能从起点插值到目标点。
 - [x] `loop: true` 时动画持续循环；`loop: false` 时停在目标点。
 - [x] instant position payload 仍可设置 `playerPosX` / `playerPosY`，并会停止当前 movement。
-- [ ] Controller 提供 start / target / duration / loop 的 movement 控制入口。
+- [x] Controller 提供 start / target / duration / loop 的 movement 控制入口。
 - [x] 更新 Unity / HTTP 命令文档，教授能直接复制 payload 测试。
 - [x] 本地 `pnpm check`、相关 `vitest` 和 `pnpm build` 通过。
 - [ ] 若代码涉及 Socket.IO 或生产集成行为，完成单副本 Zeabur 多端验证。

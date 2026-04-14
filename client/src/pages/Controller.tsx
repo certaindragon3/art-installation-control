@@ -50,6 +50,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import type {
   MapConfig,
+  MapMovementConfig,
   ReceiverState,
   ScoreConfig,
   TimingConfig,
@@ -95,6 +96,16 @@ const PRESET_COLORS = [
 
 const MAP_SCALE_MAX = 100;
 const MAP_SCALE_STEP = 0.1;
+const DEFAULT_MAP_MOVEMENT_DURATION_SECONDS = 20;
+
+type MapMovementDraft = {
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  durationSeconds: number;
+  loop: boolean;
+};
 
 type NumericInputProps = Omit<
   ComponentPropsWithoutRef<typeof Input>,
@@ -188,6 +199,40 @@ function mapYScaleToNormalized(value: number) {
   return 1 - clampNormalizedCoordinate(value / MAP_SCALE_MAX, 0.5);
 }
 
+function clampMapScale(value: number) {
+  if (!Number.isFinite(value)) {
+    return MAP_SCALE_MAX / 2;
+  }
+
+  return Math.min(MAP_SCALE_MAX, Math.max(0, value));
+}
+
+function createMapMovementDraft(map: MapConfig | null): MapMovementDraft {
+  const movement = map?.movement;
+  if (movement) {
+    return {
+      startX: mapXNormalizedToScale(movement.fromX),
+      startY: mapYNormalizedToScale(movement.fromY),
+      targetX: mapXNormalizedToScale(movement.toX),
+      targetY: mapYNormalizedToScale(movement.toY),
+      durationSeconds: movement.durationMs / 1000,
+      loop: movement.loop,
+    };
+  }
+
+  const currentX = mapXNormalizedToScale(map?.playerPosX ?? 0.5);
+  const currentY = mapYNormalizedToScale(map?.playerPosY ?? 0.5);
+
+  return {
+    startX: currentX,
+    startY: currentY,
+    targetX: currentX,
+    targetY: currentY,
+    durationSeconds: DEFAULT_MAP_MOVEMENT_DURATION_SECONDS,
+    loop: true,
+  };
+}
+
 function createMachineId(prefix: "track" | "vote", label: string) {
   const normalized = label
     .toLowerCase()
@@ -227,6 +272,9 @@ export default function Controller() {
   );
   const [voteOptionsInput, setVoteOptionsInput] = useState(
     "Rule A\nRule B\nRule C"
+  );
+  const [mapMovementDraft, setMapMovementDraft] = useState<MapMovementDraft>(
+    () => createMapMovementDraft(null)
   );
   const [voteVisibilityDuration, setVoteVisibilityDuration] = useState(15);
   const [voteAllowRevote, setVoteAllowRevote] = useState(false);
@@ -281,6 +329,11 @@ export default function Controller() {
     () => selectedReceiver?.config.map ?? null,
     [selectedReceiver]
   );
+
+  useEffect(() => {
+    setMapMovementDraft(createMapMovementDraft(selectedMap));
+  }, [selectedReceiverId]);
+
   const selectedTiming = useMemo(
     () => selectedReceiver?.config.timing ?? null,
     [selectedReceiver]
@@ -395,7 +448,7 @@ export default function Controller() {
   );
 
   const patchMap = useCallback(
-    (patch: Partial<MapConfig>) => {
+    (patch: Record<string, unknown>) => {
       if (!selectedReceiver) {
         return;
       }
@@ -411,6 +464,66 @@ export default function Controller() {
     },
     [dispatchCommand, selectedReceiver]
   );
+
+  const updateMapMovementDraft = useCallback(
+    (patch: Partial<MapMovementDraft>) => {
+      setMapMovementDraft(current => ({
+        ...current,
+        ...patch,
+      }));
+    },
+    []
+  );
+
+  const sendMapMovement = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    const durationSeconds = Math.min(
+      600,
+      Math.max(0.1, mapMovementDraft.durationSeconds)
+    );
+    const movement: Omit<MapMovementConfig, "startedAt"> = {
+      fromX: mapXScaleToNormalized(mapMovementDraft.startX),
+      fromY: mapYScaleToNormalized(mapMovementDraft.startY),
+      toX: mapXScaleToNormalized(mapMovementDraft.targetX),
+      toY: mapYScaleToNormalized(mapMovementDraft.targetY),
+      durationMs: Math.round(durationSeconds * 1000),
+      loop: mapMovementDraft.loop,
+    };
+
+    patchMap({
+      visible: true,
+      enabled: true,
+      movement,
+    });
+    postDiscreteInteraction({
+      action: "sendMapMovement",
+      element: "map:movement",
+      value: {
+        ...movement,
+        durationSeconds,
+      },
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [mapMovementDraft, patchMap, postDiscreteInteraction, selectedReceiver]);
+
+  const stopMapMovement = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    patchMap({
+      movement: null,
+    });
+    postDiscreteInteraction({
+      action: "stopMapMovement",
+      element: "map:movement",
+      value: null,
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [patchMap, postDiscreteInteraction, selectedReceiver]);
 
   const patchTiming = useCallback(
     (patch: Partial<TimingConfig>) => {
@@ -512,9 +625,7 @@ export default function Controller() {
       }
 
       const nextTrackIds = selectedReceiver.config.tracks
-        .filter(track =>
-          track.trackId === trackId ? visible : track.visible
-        )
+        .filter(track => (track.trackId === trackId ? visible : track.visible))
         .map(track => track.trackId);
 
       applyVisibleTrackIds(selectedReceiver.receiverId, nextTrackIds);
@@ -1494,6 +1605,182 @@ export default function Controller() {
                           </Button>
                         </div>
                       </FieldGroup>
+
+                      <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                        <Field>
+                          <FieldContent>
+                            <FieldLabel>Movement</FieldLabel>
+                            <FieldDescription>
+                              Send one start and target command. Receiver pages
+                              animate locally, so Unity does not need to stream
+                              positions every frame.
+                            </FieldDescription>
+                          </FieldContent>
+                        </Field>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <Field>
+                            <FieldLabel htmlFor="map-movement-start-x">
+                              Start X (0-100)
+                            </FieldLabel>
+                            <NumericInput
+                              id="map-movement-start-x"
+                              min={0}
+                              max={MAP_SCALE_MAX}
+                              step={MAP_SCALE_STEP}
+                              value={mapMovementDraft.startX}
+                              onValueChange={value =>
+                                updateMapMovementDraft({
+                                  startX: clampMapScale(value),
+                                })
+                              }
+                            />
+                          </Field>
+
+                          <Field>
+                            <FieldLabel htmlFor="map-movement-start-y">
+                              Start Y (0-100)
+                            </FieldLabel>
+                            <NumericInput
+                              id="map-movement-start-y"
+                              min={0}
+                              max={MAP_SCALE_MAX}
+                              step={MAP_SCALE_STEP}
+                              value={mapMovementDraft.startY}
+                              onValueChange={value =>
+                                updateMapMovementDraft({
+                                  startY: clampMapScale(value),
+                                })
+                              }
+                            />
+                          </Field>
+
+                          <Field>
+                            <FieldLabel htmlFor="map-movement-target-x">
+                              Target X (0-100)
+                            </FieldLabel>
+                            <NumericInput
+                              id="map-movement-target-x"
+                              min={0}
+                              max={MAP_SCALE_MAX}
+                              step={MAP_SCALE_STEP}
+                              value={mapMovementDraft.targetX}
+                              onValueChange={value =>
+                                updateMapMovementDraft({
+                                  targetX: clampMapScale(value),
+                                })
+                              }
+                            />
+                          </Field>
+
+                          <Field>
+                            <FieldLabel htmlFor="map-movement-target-y">
+                              Target Y (0-100)
+                            </FieldLabel>
+                            <NumericInput
+                              id="map-movement-target-y"
+                              min={0}
+                              max={MAP_SCALE_MAX}
+                              step={MAP_SCALE_STEP}
+                              value={mapMovementDraft.targetY}
+                              onValueChange={value =>
+                                updateMapMovementDraft({
+                                  targetY: clampMapScale(value),
+                                })
+                              }
+                            />
+                          </Field>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                          <Field>
+                            <FieldLabel htmlFor="map-movement-duration">
+                              Duration Seconds
+                            </FieldLabel>
+                            <NumericInput
+                              id="map-movement-duration"
+                              min={0.1}
+                              max={600}
+                              step={0.1}
+                              value={mapMovementDraft.durationSeconds}
+                              formatValue={value => value.toFixed(1)}
+                              onValueChange={value =>
+                                updateMapMovementDraft({
+                                  durationSeconds: Math.min(
+                                    600,
+                                    Math.max(0.1, value)
+                                  ),
+                                })
+                              }
+                            />
+                            <FieldDescription>
+                              Defaults to 20 seconds for a single
+                              start-to-target pass.
+                            </FieldDescription>
+                          </Field>
+
+                          <Field className="justify-end">
+                            <div className="flex items-center justify-between gap-4 rounded-lg border border-border/60 px-3 py-2">
+                              <FieldLabel htmlFor="map-movement-loop">
+                                Loop
+                              </FieldLabel>
+                              <Switch
+                                id="map-movement-loop"
+                                checked={mapMovementDraft.loop}
+                                onCheckedChange={checked =>
+                                  updateMapMovementDraft({ loop: checked })
+                                }
+                              />
+                            </div>
+                          </Field>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() =>
+                              updateMapMovementDraft({
+                                startX: mapXNormalizedToScale(
+                                  selectedMap?.playerPosX ?? 0.5
+                                ),
+                                startY: mapYNormalizedToScale(
+                                  selectedMap?.playerPosY ?? 0.5
+                                ),
+                              })
+                            }
+                          >
+                            Use Current As Start
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() =>
+                              updateMapMovementDraft({
+                                targetX: mapXNormalizedToScale(
+                                  selectedMap?.playerPosX ?? 0.5
+                                ),
+                                targetY: mapYNormalizedToScale(
+                                  selectedMap?.playerPosY ?? 0.5
+                                ),
+                              })
+                            }
+                          >
+                            Use Current As Target
+                          </Button>
+                          <Button type="button" onClick={sendMapMovement}>
+                            Send Movement
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={stopMapMovement}
+                            disabled={!selectedMap?.movement}
+                          >
+                            Stop Movement
+                          </Button>
+                        </div>
+                      </FieldGroup>
                     </div>
 
                     <div className="space-y-4">
@@ -1505,13 +1792,30 @@ export default function Controller() {
                       />
                       <p className="text-xs text-muted-foreground">
                         Preview keeps the same internal normalized data while
-                        this panel uses a 0-100 control scale.
-                        Current:
-                        {" "}
-                        X {mapXNormalizedToScale(selectedMap?.playerPosX ?? 0.5).toFixed(1)}
-                        {" "}
-                        · Y {mapYNormalizedToScale(selectedMap?.playerPosY ?? 0.5).toFixed(1)}
+                        this panel uses a 0-100 control scale. Current: X{" "}
+                        {mapXNormalizedToScale(
+                          selectedMap?.playerPosX ?? 0.5
+                        ).toFixed(1)}{" "}
+                        · Y{" "}
+                        {mapYNormalizedToScale(
+                          selectedMap?.playerPosY ?? 0.5
+                        ).toFixed(1)}
                       </p>
+                      {selectedMap?.movement ? (
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant="secondary">
+                            {selectedMap.movement.loop
+                              ? "Looping movement"
+                              : "One-way movement"}
+                          </Badge>
+                          <Badge variant="outline">
+                            {(selectedMap.movement.durationMs / 1000).toFixed(
+                              1
+                            )}
+                            s
+                          </Badge>
+                        </div>
+                      ) : null}
                     </div>
                   </CardContent>
                 </Card>
@@ -1532,7 +1836,9 @@ export default function Controller() {
                       <div className="grid gap-4 md:grid-cols-2">
                         <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
                           <div>
-                            <p className="text-sm font-medium">Timing Visible</p>
+                            <p className="text-sm font-medium">
+                              Timing Visible
+                            </p>
                             <p className="text-xs text-muted-foreground">
                               Shows the challenge bar and action button on the
                               receiver.
@@ -1556,7 +1862,9 @@ export default function Controller() {
 
                         <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
                           <div>
-                            <p className="text-sm font-medium">Timing Enabled</p>
+                            <p className="text-sm font-medium">
+                              Timing Enabled
+                            </p>
                             <p className="text-xs text-muted-foreground">
                               Disabled keeps the bar visible but locks the press
                               button.
@@ -1663,7 +1971,9 @@ export default function Controller() {
                           <FieldContent>
                             <div className="flex items-center gap-4">
                               <Slider
-                                value={[selectedTiming?.timingTolerance ?? 0.08]}
+                                value={[
+                                  selectedTiming?.timingTolerance ?? 0.08,
+                                ]}
                                 min={0}
                                 max={0.25}
                                 step={0.005}
@@ -1752,10 +2062,14 @@ export default function Controller() {
                             {selectedTiming?.enabled ? "Enabled" : "Locked"}
                           </Badge>
                           <Badge variant="outline">
-                            Target {(selectedTiming?.targetCenter ?? 0.5).toFixed(2)}
+                            Target{" "}
+                            {(selectedTiming?.targetCenter ?? 0.5).toFixed(2)}
                           </Badge>
                           <Badge variant="outline">
-                            ±{(selectedTiming?.timingTolerance ?? 0.08).toFixed(2)}
+                            ±
+                            {(selectedTiming?.timingTolerance ?? 0.08).toFixed(
+                              2
+                            )}
                           </Badge>
                         </div>
 
@@ -1765,25 +2079,30 @@ export default function Controller() {
                             <div
                               className="absolute inset-y-0 rounded-full bg-white/20"
                               style={{
-                                left: `${Math.max(
-                                  0,
-                                  (selectedTiming?.targetCenter ?? 0.5) -
-                                    (selectedTiming?.timingTolerance ?? 0.08)
-                                ) * 100}%`,
-                                width: `${Math.max(
-                                  0,
-                                  Math.min(
-                                    1,
-                                    (selectedTiming?.targetCenter ?? 0.5) +
+                                left: `${
+                                  Math.max(
+                                    0,
+                                    (selectedTiming?.targetCenter ?? 0.5) -
                                       (selectedTiming?.timingTolerance ?? 0.08)
-                                  ) -
-                                    Math.max(
-                                      0,
-                                      (selectedTiming?.targetCenter ?? 0.5) -
+                                  ) * 100
+                                }%`,
+                                width: `${
+                                  Math.max(
+                                    0,
+                                    Math.min(
+                                      1,
+                                      (selectedTiming?.targetCenter ?? 0.5) +
                                         (selectedTiming?.timingTolerance ??
                                           0.08)
-                                    )
-                                ) * 100}%`,
+                                    ) -
+                                      Math.max(
+                                        0,
+                                        (selectedTiming?.targetCenter ?? 0.5) -
+                                          (selectedTiming?.timingTolerance ??
+                                            0.08)
+                                      )
+                                  ) * 100
+                                }%`,
                               }}
                             />
                             <div
@@ -1868,9 +2187,7 @@ export default function Controller() {
                         </FieldContent>
                       </Field>
                       <Field orientation="responsive">
-                        <FieldLabel htmlFor="vote-options">
-                          Options
-                        </FieldLabel>
+                        <FieldLabel htmlFor="vote-options">Options</FieldLabel>
                         <FieldContent>
                           <Textarea
                             id="vote-options"
@@ -2868,9 +3185,9 @@ function ReceiverSummaryCard({
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>Score {receiver.config.score.value}</span>
         <span>
-          Map {clampNormalizedCoordinate(receiver.config.map.playerPosX).toFixed(2)}
-          ,
-          {" "}
+          Map{" "}
+          {clampNormalizedCoordinate(receiver.config.map.playerPosX).toFixed(2)}
+          ,{" "}
           {clampNormalizedCoordinate(receiver.config.map.playerPosY).toFixed(2)}
         </span>
       </div>

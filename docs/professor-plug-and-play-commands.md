@@ -356,6 +356,38 @@ curl "$BASE_URL/api/controller/timing/export"
 This replaces the old group-based workflow. Send the filenames or track IDs that
 should be visible. Every other track is hidden and stopped.
 
+Important: this is a separate command. Do **not** extend the older
+`set_track_state` payload by changing `trackId` into `string[]`.
+
+Use:
+
+```json
+{
+  "command": "set_visible_tracks",
+  "targetId": "*",
+  "payload": {
+    "trackIds": ["Accident1.mp3", "Alarm1.mp3", "Birds-001.mp3"]
+  }
+}
+```
+
+Do not use:
+
+```json
+{
+  "command": "set_track_state",
+  "targetId": "*",
+  "payload": {
+    "trackId": ["Accident1.mp3", "Alarm1.mp3"],
+    "patch": {
+      "visible": true
+    }
+  }
+}
+```
+
+Show a small list of tracks on all receivers:
+
 ```bash
 curl -X POST "$BASE_URL/api/controller/command" \
   -H "Content-Type: application/json" \
@@ -363,23 +395,38 @@ curl -X POST "$BASE_URL/api/controller/command" \
     "command": "set_visible_tracks",
     "targetId": "*",
     "payload": {
-      "trackIds": ["boing.mp3", "womp-womp.mp3"]
+      "trackIds": ["Accident1.mp3", "Alarm1.mp3", "Birds-001.mp3"]
     }
   }'
 ```
 
-For the current legacy demo tracks, `track_01` and `track_02` are still accepted:
+Show tracks on one receiver only:
 
 ```bash
 curl -X POST "$BASE_URL/api/controller/command" \
   -H "Content-Type: application/json" \
   -d '{
     "command": "set_visible_tracks",
-    "targetId": "*",
+    "targetId": "screen-a",
     "payload": {
-      "trackIds": ["track_01"]
+      "trackIds": ["TrafficBackground-001.mp3", "River1.mp3"]
     }
   }'
+```
+
+The array is the complete visible list, not an incremental patch:
+
+- `["Accident1.mp3"]` means only `Accident1.mp3` is visible.
+- `[]` means all tracks are hidden.
+- Hidden tracks are also stopped if they were playing.
+
+For the current legacy demo tracks, `track_01` and `track_02` are still accepted.
+
+One duplicated filename exists in the current audio drop:
+
+```text
+CitySounds/LightRain.mp3    -> LightRain.mp3
+NatureSounds/LightRain.mp3  -> LightRain.mp3__2
 ```
 
 Play `track_01`:

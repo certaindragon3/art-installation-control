@@ -10,6 +10,9 @@ import {
   WS_EVENTS,
 } from "@shared/wsTypes";
 
+const RECEIVER_CLIENT_INSTANCE_ID_STORAGE_KEY =
+  "art-installation:receiver-client-instance-id";
+
 interface UseSocketOptions {
   role: "controller" | "receiver" | "unity";
   receiverId?: string;
@@ -26,6 +29,38 @@ interface UseSocketReturn {
   postInteraction: (event: UnityInteractionEvent) => void;
   clearOfflineReceivers: () => void;
   requestReceiverState: () => void;
+}
+
+function createClientInstanceId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `receiver-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getReceiverClientInstanceId() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  try {
+    const existing = window.sessionStorage.getItem(
+      RECEIVER_CLIENT_INSTANCE_ID_STORAGE_KEY
+    );
+    if (existing) {
+      return existing;
+    }
+
+    const next = createClientInstanceId();
+    window.sessionStorage.setItem(
+      RECEIVER_CLIENT_INSTANCE_ID_STORAGE_KEY,
+      next
+    );
+    return next;
+  } catch {
+    return createClientInstanceId();
+  }
 }
 
 export function useSocket(options: UseSocketOptions): UseSocketReturn {
@@ -66,6 +101,7 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
         socket.emit(WS_EVENTS.REGISTER_RECEIVER, {
           receiverId,
           label: receiverLabel || `Receiver ${receiverId}`,
+          clientInstanceId: getReceiverClientInstanceId(),
         });
       }
     });
@@ -112,13 +148,16 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     socketRef.current.emit(WS_EVENTS.INTERACTION_EVENT, event);
   }, []);
 
-  const submitVote = useCallback((payload: SubmitVotePayload) => {
-    if (!socketRef.current?.connected || role !== "receiver") {
-      return;
-    }
+  const submitVote = useCallback(
+    (payload: SubmitVotePayload) => {
+      if (!socketRef.current?.connected || role !== "receiver") {
+        return;
+      }
 
-    socketRef.current.emit(WS_EVENTS.SUBMIT_VOTE, payload);
-  }, [role]);
+      socketRef.current.emit(WS_EVENTS.SUBMIT_VOTE, payload);
+    },
+    [role]
+  );
 
   const clearOfflineReceivers = useCallback(() => {
     if (!socketRef.current?.connected || role !== "controller") {

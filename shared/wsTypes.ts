@@ -107,11 +107,7 @@ export interface VoteSubmission {
   submittedAt: string;
 }
 
-export type VoteCloseReason =
-  | "timeout"
-  | "manual_close"
-  | "replaced"
-  | "reset";
+export type VoteCloseReason = "timeout" | "manual_close" | "replaced" | "reset";
 
 export interface VoteOptionResult {
   optionId: string;
@@ -147,9 +143,20 @@ export interface ScoreConfig extends VisibilityConfig {
   value: number;
 }
 
+export interface MapMovementConfig {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  startedAt: string;
+  durationMs: number;
+  loop: boolean;
+}
+
 export interface MapConfig extends VisibilityConfig {
   playerPosX: number;
   playerPosY: number;
+  movement: MapMovementConfig | null;
 }
 
 export interface TimingConfig extends VisibilityConfig {
@@ -300,6 +307,7 @@ export type ControlInputMessage = UnifiedCommand | LegacyControlMessage;
 export interface ReceiverRegistration {
   receiverId: string;
   label?: string;
+  clientInstanceId?: string;
 }
 
 export interface ReceiverState {
@@ -528,6 +536,7 @@ export function createDefaultReceiverConfig(): ReceiverConfig {
       enabled: false,
       playerPosX: 0.5,
       playerPosY: 0.5,
+      movement: null,
     },
     timing: {
       visible: false,

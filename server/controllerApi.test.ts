@@ -45,6 +45,32 @@ function waitForEvent<T>(socket: Socket, event: string) {
   });
 }
 
+function waitForNoEvent(socket: Socket, event: string, timeoutMs = 100) {
+  return new Promise<void>((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout>;
+    const onEvent = (payload: unknown) => {
+      cleanup();
+      reject(
+        new Error(
+          `Unexpected ${event} event: ${JSON.stringify(payload, null, 2)}`
+        )
+      );
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off(event, onEvent);
+    };
+
+    timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, timeoutMs);
+
+    socket.once(event, onEvent);
+  });
+}
+
 async function connectSocket(baseUrl: string) {
   const socket = createClient(baseUrl, {
     forceNew: true,
@@ -164,6 +190,121 @@ describe("controller HTTP API", () => {
           },
         },
       ],
+    });
+  });
+
+  it("assigns unique receiver IDs when duplicate registrations arrive", async () => {
+    const receiverA = await connectSocket(baseUrl);
+    const receiverB = await connectSocket(baseUrl);
+    sockets.push(receiverA, receiverB);
+
+    const receiverAStatePromise = waitForEvent<{
+      receiverId: string;
+      label: string;
+    }>(receiverA, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiverA.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Receiver screen-a",
+      clientInstanceId: "client-a",
+    });
+    await expect(receiverAStatePromise).resolves.toMatchObject({
+      receiverId: "screen-a",
+      label: "Receiver screen-a",
+    });
+
+    const receiverBStatePromise = waitForEvent<{
+      receiverId: string;
+      label: string;
+    }>(receiverB, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    receiverB.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Receiver screen-a",
+      clientInstanceId: "client-b",
+    });
+    await expect(receiverBStatePromise).resolves.toMatchObject({
+      receiverId: "screen-a2",
+      label: "Receiver screen-a2",
+    });
+
+    const response = await fetch(`${baseUrl}/api/controller/receivers`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      receivers: expect.arrayContaining([
+        expect.objectContaining({ receiverId: "screen-a" }),
+        expect.objectContaining({ receiverId: "screen-a2" }),
+      ]),
+    });
+
+    const commandPromise = waitForEvent(receiverB, WS_EVENTS.RECEIVER_COMMAND);
+    const noCommandOnReceiverA = waitForNoEvent(
+      receiverA,
+      WS_EVENTS.RECEIVER_COMMAND
+    );
+    const commandResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a2",
+        payload: {
+          module: "textDisplay",
+          patch: {
+            text: "Targeted duplicate",
+            visible: true,
+          },
+        },
+      }),
+    });
+
+    expect(commandResponse.status).toBe(200);
+    await expect(commandPromise).resolves.toMatchObject({
+      targetId: "screen-a2",
+    });
+    await noCommandOnReceiverA;
+  });
+
+  it("reclaims an offline receiver ID for the same client instance", async () => {
+    const firstSocket = await connectSocket(baseUrl);
+    sockets.push(firstSocket);
+
+    const firstStatePromise = waitForEvent<{
+      receiverId: string;
+      connected: boolean;
+    }>(firstSocket, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    firstSocket.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      clientInstanceId: "stable-client",
+    });
+    await expect(firstStatePromise).resolves.toMatchObject({
+      receiverId: "screen-a",
+      connected: true,
+    });
+
+    firstSocket.disconnect();
+    await waitFor(async () => {
+      const response = await fetch(`${baseUrl}/api/controller/receivers`);
+      const body = await response.json();
+      return body.receivers.some(
+        (receiver: { receiverId: string; connected: boolean }) =>
+          receiver.receiverId === "screen-a" && !receiver.connected
+      );
+    });
+
+    const secondSocket = await connectSocket(baseUrl);
+    sockets.push(secondSocket);
+
+    const secondStatePromise = waitForEvent<{
+      receiverId: string;
+      connected: boolean;
+    }>(secondSocket, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    secondSocket.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      clientInstanceId: "stable-client",
+    });
+
+    await expect(secondStatePromise).resolves.toMatchObject({
+      receiverId: "screen-a",
+      connected: true,
     });
   });
 
@@ -1088,6 +1229,108 @@ describe("controller HTTP API", () => {
       },
     });
 
+    const mapMovementStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        map: {
+          playerPosX: number;
+          playerPosY: number;
+          movement: {
+            fromX: number;
+            fromY: number;
+            toX: number;
+            toY: number;
+            startedAt: string;
+            durationMs: number;
+            loop: boolean;
+          } | null;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const movementStartedAt = "2026-04-14T09:00:00.000Z";
+    const mapMovementResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_module_state",
+          targetId: "screen-a",
+          payload: {
+            module: "map",
+            patch: {
+              movement: {
+                fromX: -1,
+                fromY: 0.25,
+                toX: 2,
+                toY: 0.75,
+                startedAt: movementStartedAt,
+                loop: false,
+              },
+            },
+          },
+        }),
+      }
+    );
+
+    expect(mapMovementResponse.status).toBe(200);
+    expect(await mapMovementStatePromise).toMatchObject({
+      configVersion: 5,
+      config: {
+        map: {
+          playerPosX: 1,
+          playerPosY: 0.75,
+          movement: {
+            fromX: 0,
+            fromY: 0.25,
+            toX: 1,
+            toY: 0.75,
+            startedAt: movementStartedAt,
+            durationMs: 20_000,
+            loop: false,
+          },
+        },
+      },
+    });
+
+    const mapInstantStatePromise = waitForEvent<{
+      configVersion: number;
+      config: {
+        map: {
+          playerPosX: number;
+          playerPosY: number;
+          movement: null;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    controller.emit(WS_EVENTS.CONTROL_MESSAGE, {
+      command: "set_module_state",
+      targetId: "screen-a",
+      payload: {
+        module: "map",
+        patch: {
+          playerPosX: 0.2,
+          playerPosY: 0.3,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(await mapInstantStatePromise).toMatchObject({
+      configVersion: 6,
+      config: {
+        map: {
+          playerPosX: 0.2,
+          playerPosY: 0.3,
+          movement: null,
+        },
+      },
+    });
+
     const scoreResetStatePromise = waitForEvent<{
       configVersion: number;
       config: {
@@ -1099,21 +1342,24 @@ describe("controller HTTP API", () => {
       };
     }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
 
-    const scoreResetResponse = await fetch(`${baseUrl}/api/controller/command`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        command: "score_reset",
-        targetId: "screen-a",
-        payload: {},
-      }),
-    });
+    const scoreResetResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "score_reset",
+          targetId: "screen-a",
+          payload: {},
+        }),
+      }
+    );
 
     expect(scoreResetResponse.status).toBe(200);
     expect(await scoreResetStatePromise).toMatchObject({
-      configVersion: 5,
+      configVersion: 7,
       config: {
         score: {
           visible: true,
@@ -1863,13 +2109,14 @@ describe("controller HTTP API", () => {
       const response = await fetch(`${baseUrl}/api/controller/receivers`);
       const body = await response.json();
       return body.receivers.every(
-        (receiver: {
-          config: { vote: { visible: boolean } | null };
-        }) => receiver.config.vote?.visible === false
+        (receiver: { config: { vote: { visible: boolean } | null } }) =>
+          receiver.config.vote?.visible === false
       );
     });
 
-    const exportResponse = await fetch(`${baseUrl}/api/controller/votes/export`);
+    const exportResponse = await fetch(
+      `${baseUrl}/api/controller/votes/export`
+    );
     const exportBody = await exportResponse.json();
 
     expect(exportResponse.status).toBe(200);
@@ -2027,7 +2274,9 @@ describe("controller HTTP API", () => {
       },
     });
 
-    const exportResponse = await fetch(`${baseUrl}/api/controller/votes/export`);
+    const exportResponse = await fetch(
+      `${baseUrl}/api/controller/votes/export`
+    );
     const exportBody = await exportResponse.json();
 
     expect(exportResponse.status).toBe(200);

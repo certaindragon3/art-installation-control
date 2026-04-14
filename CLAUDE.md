@@ -64,6 +64,7 @@ pnpm vitest run server/wsServer.test.ts
   - `phase6_timing/` — Phase 6: Timing Challenge Mode
   - `phase7_optional/` — Phase 7: 可选功能（Filter, Recording）
   - `phase8_professor_feedback/` — Phase 8: 教授反馈后的交付收口（voting、120 音频文件 workflow、去 group、slim interface）
+  - `phase9_receiver_map_feedback/` — Phase 9: receiver 唯一性 + 起点/终点 map 插值动画
 
 ### 路径别名
 
@@ -110,15 +111,17 @@ Receiver (浏览器)
 
 项目按 Phase（Epic）分阶段推进，每个 phase 的设计文档在 `docs/phase{N}_xxx/epic.md`。
 
-**当前开发顺序：Phase 1 → 2 → 3 → 4 → 5 → 6 → 8（教授反馈收口）**
+**当前开发顺序：Phase 1 → 2 → 3 → 4 → 5 → 6 → 8（教授反馈收口）→ 9（receiver 唯一性 + map movement）**
 
 - Phase 1 是所有后续 phase 的基础，必须先完成
 - Phase 2/3/4/5 互相独立，完成 Phase 1 后可并行
 - Phase 6 依赖 Phase 3（pulse sync）
 - Phase 7 为导师标注的 OPTIONAL / SUPER OPTIONAL 功能；根据教授最新反馈，当前明确 deferred，不作为 next step
 - Phase 8 是当前最高优先级：先完成 voting 交付验证，再处理 120 音频文件自动 control string workflow，并用 visible track array 替代 group-based 操作流
+- Phase 9 承接教授新增反馈：先保证 receiver 最终 ID 唯一，再把 map 控制从每帧位置推送改为 start/target/duration 的网页端插值动画
 
 **每完成一个 phase：**
+
 1. 确保类型检查 (`pnpm check`) 和测试 (`pnpm test`) 通过
 2. 在该 phase 的 `epic.md` 中勾选验收标准
 3. 提交 commit 并标注 phase 编号

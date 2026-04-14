@@ -13,6 +13,7 @@ import {
   type ControlInputMessage,
   createDefaultReceiverConfig,
   type GroupState,
+  type MapMovementConfig,
   legacyControlMessageToUnifiedCommand,
   type ModuleName,
   type ReceiverRegistration,
@@ -41,6 +42,7 @@ type InternalReceiverState = {
   receiverId: string;
   label: string;
   socketId: string;
+  clientInstanceId: string;
   disconnectedAt: number | null;
   connected: boolean;
   configVersion: number;
@@ -65,6 +67,9 @@ type VoteSession = {
 
 const RECEIVER_RETENTION_MS = 10 * 60 * 1000;
 const RECEIVER_CLEANUP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_MAP_MOVEMENT_DURATION_MS = 20_000;
+const MIN_MAP_MOVEMENT_DURATION_MS = 100;
+const MAX_MAP_MOVEMENT_DURATION_MS = 10 * 60 * 1000;
 
 const receivers = new Map<string, InternalReceiverState>();
 const controllers = new Set<string>();
@@ -80,12 +85,14 @@ let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 function createDefaultState(
   receiverId: string,
   label: string,
-  socketId: string
+  socketId: string,
+  clientInstanceId: string
 ): InternalReceiverState {
   return {
     receiverId,
     label,
     socketId,
+    clientInstanceId,
     disconnectedAt: null,
     connected: true,
     configVersion: 1,
@@ -112,6 +119,10 @@ function emitReceiverState(socket: Socket, state: InternalReceiverState) {
   socket.emit(WS_EVENTS.RECEIVER_STATE_UPDATE, serializeReceiverState(state));
 }
 
+function receiverRoom(receiverId: string) {
+  return `receiver:${receiverId}`;
+}
+
 function emitReceiverStateToRoom(
   receiverId: string,
   state: InternalReceiverState
@@ -120,7 +131,7 @@ function emitReceiverStateToRoom(
     return;
   }
 
-  io.to(`receiver:${receiverId}`).emit(
+  io.to(receiverRoom(receiverId)).emit(
     WS_EVENTS.RECEIVER_STATE_UPDATE,
     serializeReceiverState(state)
   );
@@ -139,9 +150,11 @@ function buildVoteConfigForReceiver(
   return {
     ...structuredClone(vote),
     selectedOptionId: canPreserveSelection
-      ? previousVote?.selectedOptionId ?? null
+      ? (previousVote?.selectedOptionId ?? null)
       : null,
-    submittedAt: canPreserveSelection ? previousVote?.submittedAt ?? null : null,
+    submittedAt: canPreserveSelection
+      ? (previousVote?.submittedAt ?? null)
+      : null,
   };
 }
 
@@ -297,7 +310,10 @@ function isTimingInteractionValue(
   );
 }
 
-function recordTimingInteraction(receiverId: string, event: UnityInteractionEvent) {
+function recordTimingInteraction(
+  receiverId: string,
+  event: UnityInteractionEvent
+) {
   if (
     event.action !== "submitTiming" ||
     event.element !== "receiver:timing_button" ||
@@ -493,14 +509,18 @@ function upsertVoteSession(vote: VoteConfig, receiverIds: string[]) {
   existing.closedAt = null;
   existing.closeReason = null;
 
-  Array.from(existing.submissions.entries()).forEach(([receiverId, submission]) => {
-    if (
-      !existing.targetReceiverIds.has(receiverId) ||
-      !existing.options.some(option => option.id === submission.selectedOptionId)
-    ) {
-      existing.submissions.delete(receiverId);
+  Array.from(existing.submissions.entries()).forEach(
+    ([receiverId, submission]) => {
+      if (
+        !existing.targetReceiverIds.has(receiverId) ||
+        !existing.options.some(
+          option => option.id === submission.selectedOptionId
+        )
+      ) {
+        existing.submissions.delete(receiverId);
+      }
     }
-  });
+  );
 
   if (vote.visible) {
     scheduleVoteAutoClose(vote.voteId);
@@ -551,7 +571,7 @@ function syncPulseLoop(receiverId: string, state: InternalReceiverState) {
     receiverId,
     bpm: state.config.pulse.bpm,
     onPulse: event => {
-      io?.to(`receiver:${receiverId}`).emit(WS_EVENTS.PULSE, event);
+      io?.to(receiverRoom(receiverId)).emit(WS_EVENTS.PULSE, event);
     },
   });
 
@@ -878,6 +898,69 @@ function resolveFiniteNumber(
   return previousValue;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampMapMovementDuration(value: unknown) {
+  if (!hasFiniteNumber(value)) {
+    return DEFAULT_MAP_MOVEMENT_DURATION_MS;
+  }
+
+  return Math.min(
+    MAX_MAP_MOVEMENT_DURATION_MS,
+    Math.max(MIN_MAP_MOVEMENT_DURATION_MS, Math.round(value))
+  );
+}
+
+function normalizeMapMovement(
+  state: InternalReceiverState,
+  value: unknown
+): MapMovementConfig | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const fromX = clampNormalizedCoordinate(
+    resolveFiniteNumber(value.fromX, value.startX, state.config.map.playerPosX),
+    state.config.map.playerPosX
+  );
+  const fromY = clampNormalizedCoordinate(
+    resolveFiniteNumber(value.fromY, value.startY, state.config.map.playerPosY),
+    state.config.map.playerPosY
+  );
+  const toX = clampNormalizedCoordinate(
+    resolveFiniteNumber(value.toX, value.targetX, state.config.map.playerPosX),
+    state.config.map.playerPosX
+  );
+  const toY = clampNormalizedCoordinate(
+    resolveFiniteNumber(value.toY, value.targetY, state.config.map.playerPosY),
+    state.config.map.playerPosY
+  );
+  const startedAt =
+    typeof value.startedAt === "string" && value.startedAt.trim()
+      ? value.startedAt
+      : new Date().toISOString();
+
+  return {
+    fromX,
+    fromY,
+    toX,
+    toY,
+    startedAt,
+    durationMs: clampMapMovementDuration(value.durationMs),
+    loop: typeof value.loop === "boolean" ? value.loop : true,
+  };
+}
+
 function assignScorePatch(
   state: InternalReceiverState,
   patch: SetModuleStatePayload["patch"]
@@ -919,22 +1002,41 @@ function assignMapPatch(
     state.config.map.enabled = patch.mapEnabled;
   }
 
-  state.config.map.playerPosX = clampNormalizedCoordinate(
-    resolveFiniteNumber(
-      patch.playerPosX,
-      patch.x,
+  const hasInstantX =
+    hasFiniteNumber(patch.playerPosX) || hasFiniteNumber(patch.x);
+  const hasInstantY =
+    hasFiniteNumber(patch.playerPosY) || hasFiniteNumber(patch.y);
+
+  if (hasInstantX || hasInstantY) {
+    state.config.map.playerPosX = clampNormalizedCoordinate(
+      resolveFiniteNumber(
+        patch.playerPosX,
+        patch.x,
+        state.config.map.playerPosX
+      ),
       state.config.map.playerPosX
-    ),
-    state.config.map.playerPosX
-  );
-  state.config.map.playerPosY = clampNormalizedCoordinate(
-    resolveFiniteNumber(
-      patch.playerPosY,
-      patch.y,
+    );
+    state.config.map.playerPosY = clampNormalizedCoordinate(
+      resolveFiniteNumber(
+        patch.playerPosY,
+        patch.y,
+        state.config.map.playerPosY
+      ),
       state.config.map.playerPosY
-    ),
-    state.config.map.playerPosY
-  );
+    );
+    state.config.map.movement = null;
+  }
+
+  if ("movement" in patch) {
+    const movement = normalizeMapMovement(state, patch.movement);
+    if (movement !== undefined) {
+      state.config.map.movement = movement;
+      if (movement) {
+        state.config.map.playerPosX = movement.toX;
+        state.config.map.playerPosY = movement.toY;
+      }
+    }
+  }
 
   return true;
 }
@@ -1005,16 +1107,16 @@ function assignTimingPatch(
     state.config.timing.timingTolerance
   );
 
-  if (
-    typeof patch.startedAt === "string" &&
-    patch.startedAt.trim()
-  ) {
+  if (typeof patch.startedAt === "string" && patch.startedAt.trim()) {
     state.config.timing.startedAt = patch.startedAt;
   } else if (patch.startedAt === null) {
     state.config.timing.startedAt = null;
   }
 
-  if (typeof patch.durationMs === "number" && Number.isFinite(patch.durationMs)) {
+  if (
+    typeof patch.durationMs === "number" &&
+    Number.isFinite(patch.durationMs)
+  ) {
     state.config.timing.durationMs = Math.max(0, patch.durationMs);
   } else if (patch.durationMs === null) {
     state.config.timing.durationMs = null;
@@ -1127,7 +1229,9 @@ export function getVoteExports() {
 }
 
 export function getTimingExport(): TimingExport {
-  const attempts = [...timingEvents].sort((left, right) => right.timestamp - left.timestamp);
+  const attempts = [...timingEvents].sort(
+    (left, right) => right.timestamp - left.timestamp
+  );
   const hits = attempts.filter(attempt => attempt.timing).length;
 
   return {
@@ -1370,7 +1474,11 @@ function submitVote(socket: Socket, payload: SubmitVotePayload) {
   }
 
   const session = voteSessions.get(payload.voteId);
-  if (!session || !session.isActive || !session.targetReceiverIds.has(receiverId)) {
+  if (
+    !session ||
+    !session.isActive ||
+    !session.targetReceiverIds.has(receiverId)
+  ) {
     return;
   }
 
@@ -1428,34 +1536,136 @@ function forwardInteractionEvent(socket: Socket, event: UnityInteractionEvent) {
   } satisfies UnityInteractionEvent);
 }
 
-function registerReceiver(socket: Socket, data: ReceiverRegistration) {
-  const receiverId = data.receiverId.trim();
-  const label = data.label?.trim();
+function normalizeClientInstanceId(socket: Socket, data: ReceiverRegistration) {
+  const clientInstanceId = data.clientInstanceId?.trim();
+  return clientInstanceId || `socket:${socket.id}`;
+}
 
-  if (!receiverId || receiverId === "*") {
+function canClaimReceiver(
+  state: InternalReceiverState,
+  socket: Socket,
+  clientInstanceId: string
+) {
+  return (
+    state.socketId === socket.id ||
+    (!state.connected && state.clientInstanceId === clientInstanceId)
+  );
+}
+
+function assignUniqueReceiverId(
+  requestedReceiverId: string,
+  socket: Socket,
+  clientInstanceId: string
+) {
+  const requestedState = receivers.get(requestedReceiverId);
+  if (
+    !requestedState ||
+    canClaimReceiver(requestedState, socket, clientInstanceId)
+  ) {
+    return requestedReceiverId;
+  }
+
+  for (let suffix = 2; suffix < 10_000; suffix += 1) {
+    const candidateReceiverId = `${requestedReceiverId}${suffix}`;
+    const candidateState = receivers.get(candidateReceiverId);
+
+    if (
+      !candidateState ||
+      canClaimReceiver(candidateState, socket, clientInstanceId)
+    ) {
+      return candidateReceiverId;
+    }
+  }
+
+  return `${requestedReceiverId}-${Date.now()}`;
+}
+
+function leaveReceiverRoomsExcept(socket: Socket, receiverIdToKeep: string) {
+  const keepRoom = receiverRoom(receiverIdToKeep);
+  socket.rooms.forEach(room => {
+    if (room.startsWith("receiver:") && room !== keepRoom) {
+      socket.leave(room);
+    }
+  });
+}
+
+function detachSocketFromPreviousReceiver(
+  socket: Socket,
+  nextReceiverId: string
+) {
+  const previousReceiverId =
+    typeof socket.data.receiverId === "string" ? socket.data.receiverId : null;
+
+  if (!previousReceiverId || previousReceiverId === nextReceiverId) {
+    return;
+  }
+
+  const previousState = receivers.get(previousReceiverId);
+  if (previousState?.socketId === socket.id) {
+    previousState.connected = false;
+    previousState.disconnectedAt = Date.now();
+    stopAllTracks(previousState);
+    incrementConfigVersion(previousState);
+    syncPulseLoop(previousReceiverId, previousState);
+  }
+}
+
+function resolveReceiverLabel(
+  requestedReceiverId: string,
+  assignedReceiverId: string,
+  rawLabel?: string
+) {
+  const label = rawLabel?.trim();
+  if (!label || label === `Receiver ${requestedReceiverId}`) {
+    return `Receiver ${assignedReceiverId}`;
+  }
+
+  return label;
+}
+
+function registerReceiver(socket: Socket, data: ReceiverRegistration) {
+  const requestedReceiverId = data.receiverId.trim();
+  const clientInstanceId = normalizeClientInstanceId(socket, data);
+
+  if (!requestedReceiverId || requestedReceiverId === "*") {
     console.warn(`[WS] Rejected invalid receiver ID from ${socket.id}`);
     return;
   }
 
+  const receiverId = assignUniqueReceiverId(
+    requestedReceiverId,
+    socket,
+    clientInstanceId
+  );
+  const displayLabel = resolveReceiverLabel(
+    requestedReceiverId,
+    receiverId,
+    data.label
+  );
+
+  detachSocketFromPreviousReceiver(socket, receiverId);
+  leaveReceiverRoomsExcept(socket, receiverId);
+
   socket.data.role = "receiver";
   socket.data.receiverId = receiverId;
+  socket.data.clientInstanceId = clientInstanceId;
 
-  const displayLabel = label || `Receiver ${receiverId}`;
   const existing = receivers.get(receiverId);
 
   if (existing) {
     existing.socketId = socket.id;
+    existing.clientInstanceId = clientInstanceId;
     existing.connected = true;
     existing.disconnectedAt = null;
     existing.label = displayLabel;
   } else {
     receivers.set(
       receiverId,
-      createDefaultState(receiverId, displayLabel, socket.id)
+      createDefaultState(receiverId, displayLabel, socket.id, clientInstanceId)
     );
   }
 
-  socket.join(`receiver:${receiverId}`);
+  socket.join(receiverRoom(receiverId));
   syncPulseLoop(receiverId, receivers.get(receiverId)!);
   emitReceiverState(socket, receivers.get(receiverId)!);
   broadcastReceiverList();
@@ -1605,7 +1815,9 @@ export function dispatchControlMessage(
       }
 
       syncPulseLoop(receiverId, state);
-      io!.to(`receiver:${receiverId}`).emit(WS_EVENTS.RECEIVER_COMMAND, command);
+      io!
+        .to(receiverRoom(receiverId))
+        .emit(WS_EVENTS.RECEIVER_COMMAND, command);
       emitReceiverStateToRoom(receiverId, state);
     });
 
@@ -1640,7 +1852,7 @@ export function dispatchControlMessage(
   }
 
   syncPulseLoop(command.targetId, state);
-  io.to(`receiver:${command.targetId}`).emit(
+  io.to(receiverRoom(command.targetId)).emit(
     WS_EVENTS.RECEIVER_COMMAND,
     command
   );

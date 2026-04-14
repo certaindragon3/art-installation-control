@@ -5,6 +5,7 @@ import { clampNormalizedCoordinate } from "@shared/wsTypes";
 interface ClassroomMapProps {
   className?: string;
   disabled?: boolean;
+  animated?: boolean;
   markerLabel?: string;
   x: number;
   y: number;
@@ -13,6 +14,7 @@ interface ClassroomMapProps {
 export function ClassroomMap({
   className,
   disabled = false,
+  animated = false,
   markerLabel = "Player",
   x,
   y,
@@ -42,7 +44,10 @@ export function ClassroomMap({
           <div className="absolute inset-4 rounded-[1.1rem] border border-dashed border-border/60 bg-background/70" />
 
           <div
-            className="absolute transition-all duration-300"
+            className={cn(
+              "absolute",
+              !animated && "transition-all duration-300"
+            )}
             style={{
               left: `${clampedX * 100}%`,
               top: `${clampedY * 100}%`,

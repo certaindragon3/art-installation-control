@@ -33,6 +33,7 @@ import {
   clampNormalizedCoordinate,
   createDefaultReceiverConfig,
   evaluateTimingPress,
+  type MapConfig,
   type PulseEvent,
   type TimingInteractionValue,
   type TrackState,
@@ -88,9 +89,39 @@ type ReceiverTimingResult = TimingInteractionValue & {
   isoTimestamp: string;
 };
 
+function resolveMapDisplayPosition(map: MapConfig, nowMs: number) {
+  const movement = map.movement;
+  if (!movement) {
+    return {
+      x: clampNormalizedCoordinate(map.playerPosX),
+      y: clampNormalizedCoordinate(map.playerPosY),
+      progress: null,
+    };
+  }
+
+  const startedAtMs = new Date(movement.startedAt).getTime();
+  const elapsedMs = Number.isFinite(startedAtMs)
+    ? Math.max(0, nowMs - startedAtMs)
+    : 0;
+  const durationMs = Math.max(1, movement.durationMs);
+  const progress = movement.loop
+    ? (elapsedMs % durationMs) / durationMs
+    : Math.min(1, elapsedMs / durationMs);
+  const fromX = clampNormalizedCoordinate(movement.fromX);
+  const fromY = clampNormalizedCoordinate(movement.fromY);
+  const toX = clampNormalizedCoordinate(movement.toX);
+  const toY = clampNormalizedCoordinate(movement.toY);
+
+  return {
+    x: fromX + (toX - fromX) * progress,
+    y: fromY + (toY - fromY) * progress,
+    progress,
+  };
+}
+
 export default function Receiver() {
   const params = useParams<{ id: string }>();
-  const receiverId = params.id || "unknown";
+  const requestedReceiverId = params.id || "unknown";
   const {
     connected,
     receiverState,
@@ -101,9 +132,11 @@ export default function Receiver() {
     postInteraction,
   } = useSocket({
     role: "receiver",
-    receiverId,
-    receiverLabel: `Receiver ${receiverId}`,
+    receiverId: requestedReceiverId,
+    receiverLabel: `Receiver ${requestedReceiverId}`,
   });
+  const receiverId = receiverState?.receiverId ?? requestedReceiverId;
+  const receiverIdWasAssigned = receiverId !== requestedReceiverId;
   const {
     postDiscreteInteraction,
     beginContinuousInteraction,
@@ -135,8 +168,13 @@ export default function Receiver() {
   const pulseEnabled = config.pulse.enabled && config.pulse.active;
   const scoreVisible = config.score.visible;
   const mapVisible = config.map.visible;
-  const clampedMapX = clampNormalizedCoordinate(config.map.playerPosX);
-  const clampedMapY = clampNormalizedCoordinate(config.map.playerPosY);
+  const mapMovementActive = Boolean(config.map.movement);
+  const mapDisplayPosition = useMemo(
+    () => resolveMapDisplayPosition(config.map, nowMs),
+    [config.map, nowMs]
+  );
+  const clampedMapX = clampNormalizedCoordinate(mapDisplayPosition.x);
+  const clampedMapY = clampNormalizedCoordinate(mapDisplayPosition.y);
   const activeVote = useMemo(() => {
     if (!config.vote?.visible || !config.vote.enabled) {
       return null;
@@ -258,7 +296,7 @@ export default function Receiver() {
   }, [config.textDisplay.text]);
 
   useEffect(() => {
-    if (!pulseEnabled) {
+    if (!pulseEnabled && !mapMovementActive) {
       return;
     }
 
@@ -273,7 +311,7 @@ export default function Receiver() {
 
     frameId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frameId);
-  }, [pulseEnabled]);
+  }, [mapMovementActive, pulseEnabled]);
 
   useEffect(() => {
     return () => {
@@ -334,7 +372,10 @@ export default function Receiver() {
           : null;
       }
 
-      if (vote.selectedOptionId && vote.selectedOptionId !== current.selectedOptionId) {
+      if (
+        vote.selectedOptionId &&
+        vote.selectedOptionId !== current.selectedOptionId
+      ) {
         return {
           voteId: vote.voteId,
           selectedOptionId: vote.selectedOptionId,
@@ -485,8 +526,9 @@ export default function Receiver() {
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
               <p className="text-xs text-muted-foreground">
-                Phase 6 score-, map-, vote-, and timing-aware interaction
-                surface
+                {receiverIdWasAssigned
+                  ? `Requested ${requestedReceiverId}, assigned ${receiverId}`
+                  : "Phase 6 score-, map-, vote-, and timing-aware interaction surface"}
               </p>
             </div>
           </div>
@@ -550,7 +592,8 @@ export default function Receiver() {
                   {activeVote.question}
                 </CardTitle>
                 <CardDescription>
-                  Other receiver interactions stay paused until this vote closes.
+                  Other receiver interactions stay paused until this vote
+                  closes.
                   {activeVote.allowRevote
                     ? " Your current choice stays visible, and you can tap another option to revise it before the timer ends."
                     : " Your first choice is final for this round."}
@@ -624,14 +667,14 @@ export default function Receiver() {
                 <CardHeader className="pb-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
-                      variant={
-                        config.timing.enabled ? "default" : "outline"
-                      }
+                      variant={config.timing.enabled ? "default" : "outline"}
                     >
                       {config.timing.enabled ? "Active" : "Locked"}
                     </Badge>
                     <Badge
-                      variant={timingStatus.pulseActive ? "secondary" : "outline"}
+                      variant={
+                        timingStatus.pulseActive ? "secondary" : "outline"
+                      }
                     >
                       {timingStatus.pulseActive ? "Pulse Synced" : "Pulse Idle"}
                     </Badge>
@@ -697,9 +740,7 @@ export default function Receiver() {
                       <span>
                         Progress {timingStatus.timingValue.toFixed(3)}
                       </span>
-                      <span>
-                        Delta {timingStatus.delta.toFixed(3)}
-                      </span>
+                      <span>Delta {timingStatus.delta.toFixed(3)}</span>
                       <span>
                         {timingStatus.pulseActive
                           ? `Pulse #${timingStatus.pulseSequence ?? "--"}`
@@ -723,7 +764,9 @@ export default function Receiver() {
                       disabled={!config.timing.enabled}
                       onClick={handleTimingPress}
                     >
-                      {config.timing.enabled ? "Press On Beat" : "Timing Locked"}
+                      {config.timing.enabled
+                        ? "Press On Beat"
+                        : "Timing Locked"}
                     </Button>
 
                     <div className="rounded-2xl border border-border/60 bg-background/80 px-4 py-3 text-sm">
@@ -731,7 +774,9 @@ export default function Receiver() {
                         <>
                           <p className="font-medium">
                             {lastTimingResult.timing ? "Hit" : "Miss"} at{" "}
-                            {new Date(lastTimingResult.isoTimestamp).toLocaleTimeString()}
+                            {new Date(
+                              lastTimingResult.isoTimestamp
+                            ).toLocaleTimeString()}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
                             value {lastTimingResult.timingValue.toFixed(3)} ·
@@ -778,9 +823,7 @@ export default function Receiver() {
                       >
                         {config.score.enabled ? "Enabled" : "Disabled"}
                       </Badge>
-                      <Badge variant="outline">
-                        Receiver {receiverId}
-                      </Badge>
+                      <Badge variant="outline">Receiver {receiverId}</Badge>
                     </div>
                     <p className="mt-6 text-xs uppercase tracking-[0.22em] text-muted-foreground">
                       Current Score
@@ -812,18 +855,28 @@ export default function Receiver() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <ClassroomMap
-                    x={config.map.playerPosX}
-                    y={config.map.playerPosY}
+                    x={mapDisplayPosition.x}
+                    y={mapDisplayPosition.y}
+                    animated={mapMovementActive}
                     disabled={!config.map.enabled}
                     markerLabel={`Receiver ${receiverId}`}
                   />
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant={config.map.enabled ? "secondary" : "outline"}>
-                      {config.map.enabled ? "Tracking Enabled" : "Tracking Disabled"}
+                    <Badge
+                      variant={config.map.enabled ? "secondary" : "outline"}
+                    >
+                      {config.map.enabled
+                        ? "Tracking Enabled"
+                        : "Tracking Disabled"}
                     </Badge>
+                    {config.map.movement ? (
+                      <Badge variant="secondary">
+                        {config.map.movement.loop ? "Looping" : "One-way"}{" "}
+                        {(config.map.movement.durationMs / 1000).toFixed(1)}s
+                      </Badge>
+                    ) : null}
                     <Badge variant="outline">
-                      Left→Right {(clampedMapX * 100).toFixed(1)} · Back→Front
-                      {" "}
+                      Left→Right {(clampedMapX * 100).toFixed(1)} · Back→Front{" "}
                       {((1 - clampedMapY) * 100).toFixed(1)}
                     </Badge>
                   </div>

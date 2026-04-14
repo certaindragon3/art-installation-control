@@ -203,7 +203,37 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
-Move the receiver marker:
+Animate the receiver marker from a start position to a target position.
+This is the recommended Unity workflow: send one movement command, then the
+receiver page interpolates locally. Unity does not need to send a position every
+frame.
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_module_state",
+    "targetId": "screen-a",
+    "payload": {
+      "module": "map",
+      "patch": {
+        "visible": true,
+        "enabled": true,
+        "movement": {
+          "fromX": 0.10,
+          "fromY": 0.80,
+          "toX": 0.90,
+          "toY": 0.20,
+          "durationMs": 20000,
+          "loop": true
+        }
+      }
+    }
+  }'
+```
+
+Set an instant marker position for debug or manual placement. This also stops
+the current movement animation:
 
 ```bash
 curl -X POST "$BASE_URL/api/controller/command" \
@@ -216,6 +246,23 @@ curl -X POST "$BASE_URL/api/controller/command" \
       "patch": {
         "playerPosX": 0.20,
         "playerPosY": 0.80
+      }
+    }
+  }'
+```
+
+Stop the movement animation without hiding the map:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_module_state",
+    "targetId": "screen-a",
+    "payload": {
+      "module": "map",
+      "patch": {
+        "movement": null
       }
     }
   }'
@@ -401,7 +448,7 @@ curl -X POST "$BASE_URL/api/controller/command" \
 2. Create a group
 3. Regroup `track_01`
 4. Start pulse
-5. Show the map and move the marker
+5. Show the map and send a 20s looping movement
 6. Enable timing challenge
 7. Open `/receiver/:id` and try the timing button
 8. Export timing results

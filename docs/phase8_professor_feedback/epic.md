@@ -99,7 +99,7 @@
 
 - [x] Voting 经过本地 `check` / `test` / `build` 验证。
 - [x] Voting 有教授可直接执行的测试说明。
-- [ ] Voting 在线上单副本 Zeabur 环境完成多端验证，若代码变更涉及部署或 Socket.IO 行为。
+- [x] Voting 在线上单副本 Zeabur 环境完成多端验证，若代码变更涉及部署或 Socket.IO 行为。
 - [x] 音频 manifest 生成流程可从一批音频文件产出 track definitions。
 - [x] 文件名到 control string 的规则写入文档。
 - [x] `set_visible_tracks` 可通过 HTTP controller API 控制 receiver 可见音轨。

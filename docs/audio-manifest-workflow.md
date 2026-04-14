@@ -76,3 +76,29 @@ Supported extensions:
 - `shared/trackManifest.overrides.json` can preserve explicit IDs for special cases.
 - The current overrides keep the two legacy demo tracks available as `track_01` and `track_02`.
 - For the professor's final audio package, new files will use exact filenames as control strings unless an override is added.
+
+## Current Professor Drop
+
+The first professor audio drop has been copied into:
+
+```bash
+client/public/audio/CitySounds
+client/public/audio/NatureSounds
+```
+
+This drop contains 79 files: 40 city sounds and 39 nature sounds. Together with
+the two legacy demo files, the generated library currently has 81 tracks.
+
+One filename appears in both folders:
+
+```text
+CitySounds/LightRain.mp3
+NatureSounds/LightRain.mp3
+```
+
+Because control strings must be unique, the generated IDs are:
+
+```text
+LightRain.mp3
+LightRain.mp3__2
+```

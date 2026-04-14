@@ -7,6 +7,7 @@ import { resetWebSocketState } from "./wsServer";
 import {
   AUDIO_URLS,
   CONFIG_TTL_MS,
+  DEFAULT_TRACK_LIBRARY,
   DEFAULT_ICON_COLOR,
   type PulseEvent,
   WS_EVENTS,
@@ -132,9 +133,14 @@ describe("controller HTTP API", () => {
       connected: true,
       configVersion: 1,
       config: {
-        tracks: [{ trackId: "track_01" }, { trackId: "track_02" }],
+        tracks: expect.arrayContaining([
+          expect.objectContaining({ trackId: "track_01" }),
+          expect.objectContaining({ trackId: "track_02" }),
+          expect.objectContaining({ trackId: "Accident1.mp3" }),
+        ]),
       },
     });
+    expect(state.config.tracks).toHaveLength(DEFAULT_TRACK_LIBRARY.length);
     expect(new Date(state.configExpiresAt).getTime()).toBeGreaterThan(
       Date.now()
     );
@@ -345,7 +351,10 @@ describe("controller HTTP API", () => {
     expect(await removeStatePromise).toMatchObject({
       configVersion: 3,
       config: {
-        tracks: [{ trackId: "track_01" }, { trackId: "track_02" }],
+        tracks: expect.arrayContaining([
+          expect.objectContaining({ trackId: "track_01" }),
+          expect.objectContaining({ trackId: "track_02" }),
+        ]),
       },
     });
 
@@ -442,16 +451,16 @@ describe("controller HTTP API", () => {
         visuals: {
           iconColor: DEFAULT_ICON_COLOR,
         },
-        tracks: [
-          {
+        tracks: expect.arrayContaining([
+          expect.objectContaining({
             trackId: "track_01",
             playing: false,
-          },
-          {
-            trackId: "track_02",
+          }),
+          expect.objectContaining({
+            trackId: "Accident1.mp3",
             playing: false,
-          },
-        ],
+          }),
+        ]),
       },
     });
   });

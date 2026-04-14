@@ -8,6 +8,401 @@ export const GENERATED_TRACK_LIBRARY = [
     "url": "/audio/boing.mp3"
   },
   {
+    "trackId": "Accident1.mp3",
+    "label": "Accident1",
+    "url": "/audio/CitySounds/Accident1.mp3"
+  },
+  {
+    "trackId": "Accident2.mp3",
+    "label": "Accident2",
+    "url": "/audio/CitySounds/Accident2.mp3"
+  },
+  {
+    "trackId": "Alarm1.mp3",
+    "label": "Alarm1",
+    "url": "/audio/CitySounds/Alarm1.mp3"
+  },
+  {
+    "trackId": "Bicycle-001.mp3",
+    "label": "Bicycle-001",
+    "url": "/audio/CitySounds/Bicycle-001.mp3"
+  },
+  {
+    "trackId": "Bicycle-002.mp3",
+    "label": "Bicycle-002",
+    "url": "/audio/CitySounds/Bicycle-002.mp3"
+  },
+  {
+    "trackId": "Bicycle-003.mp3",
+    "label": "Bicycle-003",
+    "url": "/audio/CitySounds/Bicycle-003.mp3"
+  },
+  {
+    "trackId": "BikePassing1.mp3",
+    "label": "BikePassing1",
+    "url": "/audio/CitySounds/BikePassing1.mp3"
+  },
+  {
+    "trackId": "BikeRing1.mp3",
+    "label": "BikeRing1",
+    "url": "/audio/CitySounds/BikeRing1.mp3"
+  },
+  {
+    "trackId": "BikeRing2.mp3",
+    "label": "BikeRing2",
+    "url": "/audio/CitySounds/BikeRing2.mp3"
+  },
+  {
+    "trackId": "BikeRing3.mp3",
+    "label": "BikeRing3",
+    "url": "/audio/CitySounds/BikeRing3.mp3"
+  },
+  {
+    "trackId": "BuidlingConstruction1.mp3",
+    "label": "BuidlingConstruction1",
+    "url": "/audio/CitySounds/BuidlingConstruction1.mp3"
+  },
+  {
+    "trackId": "BuidlingConstruction2.mp3",
+    "label": "BuidlingConstruction2",
+    "url": "/audio/CitySounds/BuidlingConstruction2.mp3"
+  },
+  {
+    "trackId": "CarClock.mp3",
+    "label": "CarClock",
+    "url": "/audio/CitySounds/CarClock.mp3"
+  },
+  {
+    "trackId": "Crowd1.mp3",
+    "label": "Crowd1",
+    "url": "/audio/CitySounds/Crowd1.mp3"
+  },
+  {
+    "trackId": "Crowd2.mp3",
+    "label": "Crowd2",
+    "url": "/audio/CitySounds/Crowd2.mp3"
+  },
+  {
+    "trackId": "Crowd3.mp3",
+    "label": "Crowd3",
+    "url": "/audio/CitySounds/Crowd3.mp3"
+  },
+  {
+    "trackId": "Crowd4.mp3",
+    "label": "Crowd4",
+    "url": "/audio/CitySounds/Crowd4.mp3"
+  },
+  {
+    "trackId": "GlassShattered.mp3",
+    "label": "GlassShattered",
+    "url": "/audio/CitySounds/GlassShattered.mp3"
+  },
+  {
+    "trackId": "HIghAlarm-001.mp3",
+    "label": "HIghAlarm-001",
+    "url": "/audio/CitySounds/HIghAlarm-001.mp3"
+  },
+  {
+    "trackId": "HIghAlarm-002.mp3",
+    "label": "HIghAlarm-002",
+    "url": "/audio/CitySounds/HIghAlarm-002.mp3"
+  },
+  {
+    "trackId": "HIghAlarm-003.mp3",
+    "label": "HIghAlarm-003",
+    "url": "/audio/CitySounds/HIghAlarm-003.mp3"
+  },
+  {
+    "trackId": "HIghAlarm.mp3",
+    "label": "HIghAlarm",
+    "url": "/audio/CitySounds/HIghAlarm.mp3"
+  },
+  {
+    "trackId": "Honking1.mp3",
+    "label": "Honking1",
+    "url": "/audio/CitySounds/Honking1.mp3"
+  },
+  {
+    "trackId": "Honking2.mp3",
+    "label": "Honking2",
+    "url": "/audio/CitySounds/Honking2.mp3"
+  },
+  {
+    "trackId": "Honking3.mp3",
+    "label": "Honking3",
+    "url": "/audio/CitySounds/Honking3.mp3"
+  },
+  {
+    "trackId": "LightRain.mp3",
+    "label": "LightRain",
+    "url": "/audio/CitySounds/LightRain.mp3"
+  },
+  {
+    "trackId": "Motorbike1.mp3",
+    "label": "Motorbike1",
+    "url": "/audio/CitySounds/Motorbike1.mp3"
+  },
+  {
+    "trackId": "Motorbike2.mp3",
+    "label": "Motorbike2",
+    "url": "/audio/CitySounds/Motorbike2.mp3"
+  },
+  {
+    "trackId": "Police1.mp3",
+    "label": "Police1",
+    "url": "/audio/CitySounds/Police1.mp3"
+  },
+  {
+    "trackId": "PoliceDoppler1.mp3",
+    "label": "PoliceDoppler1",
+    "url": "/audio/CitySounds/PoliceDoppler1.mp3"
+  },
+  {
+    "trackId": "Talking1.mp3",
+    "label": "Talking1",
+    "url": "/audio/CitySounds/Talking1.mp3"
+  },
+  {
+    "trackId": "TalkingAngry.mp3",
+    "label": "TalkingAngry",
+    "url": "/audio/CitySounds/TalkingAngry.mp3"
+  },
+  {
+    "trackId": "TrafficBackground-001.mp3",
+    "label": "TrafficBackground-001",
+    "url": "/audio/CitySounds/TrafficBackground-001.mp3"
+  },
+  {
+    "trackId": "TrafficBackground-002.mp3",
+    "label": "TrafficBackground-002",
+    "url": "/audio/CitySounds/TrafficBackground-002.mp3"
+  },
+  {
+    "trackId": "TrafficBackground-003.mp3",
+    "label": "TrafficBackground-003",
+    "url": "/audio/CitySounds/TrafficBackground-003.mp3"
+  },
+  {
+    "trackId": "Truck1.mp3",
+    "label": "Truck1",
+    "url": "/audio/CitySounds/Truck1.mp3"
+  },
+  {
+    "trackId": "Vehicle-001.mp3",
+    "label": "Vehicle-001",
+    "url": "/audio/CitySounds/Vehicle-001.mp3"
+  },
+  {
+    "trackId": "Vehicle-002.mp3",
+    "label": "Vehicle-002",
+    "url": "/audio/CitySounds/Vehicle-002.mp3"
+  },
+  {
+    "trackId": "Vehicle-003.mp3",
+    "label": "Vehicle-003",
+    "url": "/audio/CitySounds/Vehicle-003.mp3"
+  },
+  {
+    "trackId": "Vehicle-004.mp3",
+    "label": "Vehicle-004",
+    "url": "/audio/CitySounds/Vehicle-004.mp3"
+  },
+  {
+    "trackId": "Birds-001.mp3",
+    "label": "Birds-001",
+    "url": "/audio/NatureSounds/Birds-001.mp3"
+  },
+  {
+    "trackId": "Birds-002.mp3",
+    "label": "Birds-002",
+    "url": "/audio/NatureSounds/Birds-002.mp3"
+  },
+  {
+    "trackId": "Birds-003.mp3",
+    "label": "Birds-003",
+    "url": "/audio/NatureSounds/Birds-003.mp3"
+  },
+  {
+    "trackId": "Birds-004.mp3",
+    "label": "Birds-004",
+    "url": "/audio/NatureSounds/Birds-004.mp3"
+  },
+  {
+    "trackId": "Birds-005.mp3",
+    "label": "Birds-005",
+    "url": "/audio/NatureSounds/Birds-005.mp3"
+  },
+  {
+    "trackId": "Birds-006.mp3",
+    "label": "Birds-006",
+    "url": "/audio/NatureSounds/Birds-006.mp3"
+  },
+  {
+    "trackId": "Birds-007.mp3",
+    "label": "Birds-007",
+    "url": "/audio/NatureSounds/Birds-007.mp3"
+  },
+  {
+    "trackId": "Birds-008.mp3",
+    "label": "Birds-008",
+    "url": "/audio/NatureSounds/Birds-008.mp3"
+  },
+  {
+    "trackId": "Birds-009.mp3",
+    "label": "Birds-009",
+    "url": "/audio/NatureSounds/Birds-009.mp3"
+  },
+  {
+    "trackId": "Birds-010.mp3",
+    "label": "Birds-010",
+    "url": "/audio/NatureSounds/Birds-010.mp3"
+  },
+  {
+    "trackId": "Birds-011.mp3",
+    "label": "Birds-011",
+    "url": "/audio/NatureSounds/Birds-011.mp3"
+  },
+  {
+    "trackId": "Birds-012.mp3",
+    "label": "Birds-012",
+    "url": "/audio/NatureSounds/Birds-012.mp3"
+  },
+  {
+    "trackId": "Birds-013.mp3",
+    "label": "Birds-013",
+    "url": "/audio/NatureSounds/Birds-013.mp3"
+  },
+  {
+    "trackId": "Birds-014.mp3",
+    "label": "Birds-014",
+    "url": "/audio/NatureSounds/Birds-014.mp3"
+  },
+  {
+    "trackId": "Birds.mp3",
+    "label": "Birds",
+    "url": "/audio/NatureSounds/Birds.mp3"
+  },
+  {
+    "trackId": "Frog-001.mp3",
+    "label": "Frog-001",
+    "url": "/audio/NatureSounds/Frog-001.mp3"
+  },
+  {
+    "trackId": "Frog-002.mp3",
+    "label": "Frog-002",
+    "url": "/audio/NatureSounds/Frog-002.mp3"
+  },
+  {
+    "trackId": "Frog-003.mp3",
+    "label": "Frog-003",
+    "url": "/audio/NatureSounds/Frog-003.mp3"
+  },
+  {
+    "trackId": "Frog-004.mp3",
+    "label": "Frog-004",
+    "url": "/audio/NatureSounds/Frog-004.mp3"
+  },
+  {
+    "trackId": "Insects-001.mp3",
+    "label": "Insects-001",
+    "url": "/audio/NatureSounds/Insects-001.mp3"
+  },
+  {
+    "trackId": "Insects-002.mp3",
+    "label": "Insects-002",
+    "url": "/audio/NatureSounds/Insects-002.mp3"
+  },
+  {
+    "trackId": "Insects-003.mp3",
+    "label": "Insects-003",
+    "url": "/audio/NatureSounds/Insects-003.mp3"
+  },
+  {
+    "trackId": "LightRain.mp3__2",
+    "label": "LightRain",
+    "url": "/audio/NatureSounds/LightRain.mp3"
+  },
+  {
+    "trackId": "Monkey-001.mp3",
+    "label": "Monkey-001",
+    "url": "/audio/NatureSounds/Monkey-001.mp3"
+  },
+  {
+    "trackId": "Monkey-002.mp3",
+    "label": "Monkey-002",
+    "url": "/audio/NatureSounds/Monkey-002.mp3"
+  },
+  {
+    "trackId": "Puma-001.mp3",
+    "label": "Puma-001",
+    "url": "/audio/NatureSounds/Puma-001.mp3"
+  },
+  {
+    "trackId": "Puma-002.mp3",
+    "label": "Puma-002",
+    "url": "/audio/NatureSounds/Puma-002.mp3"
+  },
+  {
+    "trackId": "Puma-003.mp3",
+    "label": "Puma-003",
+    "url": "/audio/NatureSounds/Puma-003.mp3"
+  },
+  {
+    "trackId": "River1.mp3",
+    "label": "River1",
+    "url": "/audio/NatureSounds/River1.mp3"
+  },
+  {
+    "trackId": "SmallMonkey-001.mp3",
+    "label": "SmallMonkey-001",
+    "url": "/audio/NatureSounds/SmallMonkey-001.mp3"
+  },
+  {
+    "trackId": "SmallMonkey-002.mp3",
+    "label": "SmallMonkey-002",
+    "url": "/audio/NatureSounds/SmallMonkey-002.mp3"
+  },
+  {
+    "trackId": "SmallMonkey-003.mp3",
+    "label": "SmallMonkey-003",
+    "url": "/audio/NatureSounds/SmallMonkey-003.mp3"
+  },
+  {
+    "trackId": "Storm-001.mp3",
+    "label": "Storm-001",
+    "url": "/audio/NatureSounds/Storm-001.mp3"
+  },
+  {
+    "trackId": "Storm-002.mp3",
+    "label": "Storm-002",
+    "url": "/audio/NatureSounds/Storm-002.mp3"
+  },
+  {
+    "trackId": "Storm-003.mp3",
+    "label": "Storm-003",
+    "url": "/audio/NatureSounds/Storm-003.mp3"
+  },
+  {
+    "trackId": "StrongWind1.mp3",
+    "label": "StrongWind1",
+    "url": "/audio/NatureSounds/StrongWind1.mp3"
+  },
+  {
+    "trackId": "StrongWind2.mp3",
+    "label": "StrongWind2",
+    "url": "/audio/NatureSounds/StrongWind2.mp3"
+  },
+  {
+    "trackId": "Wasp-001.mp3",
+    "label": "Wasp-001",
+    "url": "/audio/NatureSounds/Wasp-001.mp3"
+  },
+  {
+    "trackId": "Wasp-002.mp3",
+    "label": "Wasp-002",
+    "url": "/audio/NatureSounds/Wasp-002.mp3"
+  },
+  {
     "trackId": "track_02",
     "label": "Womp Womp",
     "url": "/audio/womp-womp.mp3"

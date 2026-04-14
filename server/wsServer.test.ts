@@ -3,6 +3,7 @@ import {
   AUDIO_URLS,
   CONFIG_TTL_MS,
   createDefaultReceiverConfig,
+  DEFAULT_TRACK_LIBRARY,
   legacyTrackIdToTrackKey,
   legacyControlMessageToUnifiedCommand,
   type LegacyControlMessage,
@@ -27,21 +28,39 @@ describe("Phase 1 shared protocol", () => {
     const config = createDefaultReceiverConfig();
 
     expect(CONFIG_TTL_MS).toBe(60_000);
-    expect(config.tracks).toHaveLength(2);
-    expect(config.tracks[0]).toMatchObject({
-      trackId: "track_01",
-      label: "Boing",
-      playing: false,
-      playable: true,
-      loopEnabled: false,
-      loopControlVisible: true,
-      loopControlLocked: false,
-      volumeValue: 1,
-      volumeControlVisible: false,
-      volumeControlEnabled: true,
-      tempoFlashEnabled: false,
-      fillTime: 1,
-    });
+    expect(config.tracks).toHaveLength(DEFAULT_TRACK_LIBRARY.length);
+    expect(config.tracks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trackId: "track_01",
+          label: "Boing",
+          playing: false,
+          playable: true,
+          loopEnabled: false,
+          loopControlVisible: true,
+          loopControlLocked: false,
+          volumeValue: 1,
+          volumeControlVisible: false,
+          volumeControlEnabled: true,
+          tempoFlashEnabled: false,
+          fillTime: 1,
+        }),
+        expect.objectContaining({
+          trackId: "track_02",
+          label: "Womp Womp",
+        }),
+        expect.objectContaining({
+          trackId: "Accident1.mp3",
+          label: "Accident1",
+          url: "/audio/CitySounds/Accident1.mp3",
+        }),
+        expect.objectContaining({
+          trackId: "LightRain.mp3__2",
+          label: "LightRain",
+          url: "/audio/NatureSounds/LightRain.mp3",
+        }),
+      ])
+    );
     expect(config.groups).toEqual([]);
     expect(config.pulse).toMatchObject({
       visible: false,
@@ -83,6 +102,12 @@ describe("Phase 1 shared protocol", () => {
   it("keeps the shipped audio assets addressable through dynamic track ids", () => {
     expect(AUDIO_URLS.track_01).toBe("/audio/boing.mp3");
     expect(AUDIO_URLS.track_02).toBe("/audio/womp-womp.mp3");
+    expect(AUDIO_URLS["Accident1.mp3"]).toBe(
+      "/audio/CitySounds/Accident1.mp3"
+    );
+    expect(AUDIO_URLS["LightRain.mp3__2"]).toBe(
+      "/audio/NatureSounds/LightRain.mp3"
+    );
   });
 
   it("maps legacy HTTP/socket messages into unified commands", () => {

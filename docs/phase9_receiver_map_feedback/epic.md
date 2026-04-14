@@ -158,7 +158,7 @@ interface MapConfig {
 - [x] Controller 提供 start / target / duration / loop 的 movement 控制入口。
 - [x] 更新 Unity / HTTP 命令文档，教授能直接复制 payload 测试。
 - [x] 本地 `pnpm check`、相关 `vitest` 和 `pnpm build` 通过。
-- [ ] 若代码涉及 Socket.IO 或生产集成行为，完成单副本 Zeabur 多端验证。
+- [x] 若代码涉及 Socket.IO 或生产集成行为，完成单副本 Zeabur 多端验证。
 
 ## 测试建议
 

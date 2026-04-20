@@ -28,6 +28,8 @@
 - Phase 9 movement 以当前协议为准，重点复核 `loop: true` 是否持续循环。
 - 自动生成给 Unity 使用的 JSON cue 单段建议不超过 10 秒；runtime API 不全局硬拒绝更长 duration。
 
+D9 production verification completed on 2026-04-20 with `agent-browser` against `https://artinstallation.certaindragon3.work`. Evidence is stored in `evidence/phase10-loop-movement-agent-browser.md`.
+
 ## 背景
 
 教授这次反馈把系统重心从“controller 远程播放 receiver 音频”转向“receiver 学生自己决定何时播放可见音轨”。Controller 的职责更接近：

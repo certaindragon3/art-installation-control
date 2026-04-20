@@ -131,6 +131,13 @@ Fallback：
 
 **Decision: 以现有 Phase 9 协议为准，重点复核 `loop: true` 是否持续循环移动。**
 
+**Production verification: passed on 2026-04-20.**
+
+Evidence:
+
+- `docs/phase10_final_touch/evidence/phase10-loop-movement-agent-browser.md`
+- `docs/phase10_final_touch/evidence/phase10-loop-movement-receiver.png`
+
 目前代码层面的预期行为应是：
 
 - `loop: true`：receiver 端用 elapsed modulo duration 计算 progress，marker 从 start 到 target 不断重复。

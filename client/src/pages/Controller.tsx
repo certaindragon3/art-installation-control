@@ -1034,11 +1034,11 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 6 Controller
+                Phase 10 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Scoring, map, voting, pulse, timing, and state-driven receiver
-                control
+                Receiver-led economy, visible tracks, voting, map, and live
+                receiver control
               </p>
             </div>
           </div>

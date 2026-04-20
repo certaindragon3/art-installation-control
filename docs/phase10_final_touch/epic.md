@@ -334,7 +334,7 @@ Phase 10 不重新设计 movement。需要复核：
 - [x] Phase 9 `loop: true` movement 重新验证为持续循环移动。
 - [x] 自动生成 / 文档推荐的 Unity cue JSON 单段不超过 10 秒。
 - [x] 本地 `corepack pnpm check`、`corepack pnpm test`、`corepack pnpm build` 通过。
-- [ ] 若实现涉及 Socket.IO、生产路由或 Home/Controller 路由行为，完成单副本 Zeabur 多端验证。
+- [x] 若实现涉及 Socket.IO、生产路由或 Home/Controller 路由行为，完成单副本 Zeabur 多端验证。
 
 ## 测试建议
 

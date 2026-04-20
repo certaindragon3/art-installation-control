@@ -127,8 +127,62 @@ Receiver (浏览器)
 **每完成一个 phase：**
 
 1. 确保类型检查 (`pnpm check`) 和测试 (`pnpm test`) 通过
-2. 在该 phase 的 `epic.md` 中勾选验收标准
-3. 提交 commit 并标注 phase 编号
+2. 使用 `agent-browser` 对本 phase 的核心用户路径做浏览器烟测，并在 `closeout.md` 中记录测试过程和结果
+3. 在该 phase 的 `epic.md` 中勾选验收标准
+4. 更新该 phase 的 `closeout.md`，写清楚交付内容、API / 协议变动、验证证据和后续注意事项
+5. 提交 commit 并标注 phase 编号
+
+### Phase Closeout 写作规范
+
+每个 phase 的 `closeout.md` 最终会被聚合成给教授 / Unity 侧使用的 API 手册，因此不能只写开发日志。Closeout 必须按“可对外阅读、可复制调用、可验证”的标准书写。
+
+建议固定包含以下内容：
+
+- **阶段元信息**：Phase 编号、阶段名称、完成日期、对应需求 / 教授反馈、依赖 phase、测试 URL 或本地 URL。
+- **交付概览**：用结果导向描述“现在能做什么”，避免只写“改了某文件”。如果某能力有明确边界或暂不支持，也要写清楚。
+- **主要文件**：列出本阶段真正影响行为的前端、服务端、共享类型、测试和教授文档文件。
+- **API / 协议变动**：这是 closeout 的核心。必须明确新增、修改、兼容、废弃或无变化的接口。
+- **HTTP API**：列出 endpoint、method、请求 body、响应关键字段、错误 / 边界行为。若没有新增 HTTP 路由，也要写“无新增 HTTP 路由，复用哪些现有入口”。
+- **Socket.IO / Unified Command**：列出事件名、command 名、`targetId` 规则、payload schema、字段说明、默认值、clamp / normalization、广播行为和 receiver 回写限制。
+- **状态快照变化**：如果 `ReceiverState`、`config`、track、module、vote、score、map 等结构变化，写出变化后的 JSON / TypeScript 摘要，并说明哪些接口会返回这些字段。
+- **Unity / 外部程序集成说明**：写教授或 Unity 侧最应该复制的调用示例，优先给 `POST /api/controller/command` payload；说明推荐工作流和不推荐的旧方式。
+- **兼容性与迁移**：记录 legacy 字段、别名、旧 payload 是否还支持、行为是否改变，以及教授现有脚本是否需要更新。
+- **本地验证**：记录实际运行过的命令，至少覆盖相关范围的 `corepack pnpm check`、`corepack pnpm test`、必要时 `corepack pnpm build`。
+- **agent-browser 浏览器验证**：每个 phase 收尾都要做。记录工具为 `agent-browser`，写明测试环境、URL、关键步骤、观察结果、涉及的 receiver id / vote id / track id，以及失败重试或环境限制。
+- **部署 / 运行注意事项**：若涉及 Zeabur、生产构建、Socket.IO、跨设备、健康检查或反向代理，写明是否做了 Zeabur 验证；继续强调线上必须单副本。
+- **未覆盖项和后续建议**：只写真实剩余风险，例如未做多设备人工联调、未验证真实音频包、某视觉细节需教授确认。
+
+API 章节的书写要求：
+
+- 给出可以直接复制的 JSON 示例，不要只描述字段名。
+- 每个新增 command 至少包含一个最小可用 payload 和一个字段说明。
+- 对 `targetId: "*"`、单 receiver id、server-assigned receiver id 的适用场景写清楚。
+- 对时间、坐标、分数、音量、颜色等数值字段写清楚单位和范围。
+- 对服务端自动行为写清楚，例如 clamp、默认值、自动停止播放、自动关闭投票、自动生成 `startedAt`。
+- 如果本 phase 没有 API 变化，仍要写一个 “API Changes: None” 小节，并说明仅 UI / 文档 / 测试变化。
+- 避免把内部实现细节放在 API 章节里；实现细节放在“主要代码变动”，API 章节面向教授和 Unity 调用方。
+
+`agent-browser` 验证记录建议使用这个结构：
+
+```markdown
+## Browser Smoke Test
+
+Tooling: `agent-browser`
+Environment: `https://artinstallation.certaindragon3.work` or local dev URL
+Date: YYYY-MM-DD
+
+1. Opened `/receiver/<id>`.
+   - Observed receiver connected and displayed expected state.
+2. Opened `/controller`.
+   - Observed receiver listed online.
+3. Sent / triggered `<command>`.
+   - Observed API returned `ok: true`.
+   - Observed receiver UI changed from `<before>` to `<after>`.
+4. Queried `<endpoint>`.
+   - Confirmed snapshot includes `<field>`.
+```
+
+如果浏览器环境出现限制，例如 HTTP 被拦截、按钮 click 需要 DOM fallback、音频自动播放被浏览器策略阻止，必须在 closeout 的注意事项中写清楚，同时说明最终验证用了什么替代路径。
 
 **需求主文档：** `docs/requirements-master.md` — 导师原始需求，是所有 epic 设计的 source of truth。
 

@@ -54,7 +54,8 @@ Then run:
 corepack pnpm audio:manifest
 ```
 
-The script scans supported audio extensions and writes:
+The script scans supported audio extensions, reads duration with `ffprobe`, and
+writes:
 
 ```bash
 shared/trackManifest.generated.ts
@@ -73,7 +74,9 @@ Supported extensions:
 - Nested folders are supported.
 - URL path segments are encoded, so spaces in filenames remain valid on disk.
 - Duplicate filenames in different nested folders receive a `__2`, `__3`, etc. suffix in `trackId`.
-- `shared/trackManifest.overrides.json` can preserve explicit IDs for special cases.
+- Each generated track includes `durationSeconds`, `categoryId`, and `categoryColor`.
+- `categoryId` defaults to the first folder under `client/public/audio`; root files use `root`.
+- `shared/trackManifest.overrides.json` can preserve explicit IDs or override `label`, `durationSeconds`, `categoryId`, and `categoryColor`.
 - The current overrides keep the two legacy demo tracks available as `track_01` and `track_02`.
 - For the professor's final audio package, new files will use exact filenames as control strings unless an override is added.
 

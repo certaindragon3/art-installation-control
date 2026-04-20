@@ -34,6 +34,9 @@ describe("Phase 1 shared protocol", () => {
         expect.objectContaining({
           trackId: "track_01",
           label: "Boing",
+          durationSeconds: expect.any(Number),
+          categoryId: "root",
+          categoryColor: expect.any(String),
           playing: false,
           playable: true,
           loopEnabled: false,
@@ -53,6 +56,9 @@ describe("Phase 1 shared protocol", () => {
           trackId: "Accident1.mp3",
           label: "Accident1",
           url: "/audio/CitySounds/Accident1.mp3",
+          durationSeconds: expect.any(Number),
+          categoryId: "CitySounds",
+          categoryColor: expect.any(String),
         }),
         expect.objectContaining({
           trackId: "LightRain.mp3__2",
@@ -92,6 +98,19 @@ describe("Phase 1 shared protocol", () => {
       enabled: true,
       iconColor: "#6366f1",
     });
+    expect(config.economy).toMatchObject({
+      visible: true,
+      enabled: true,
+      currencySeconds: 30,
+      startingSeconds: 30,
+      earnRatePerSecond: 1,
+      inflation: 1,
+      inflationGrowthPerSecond: 0.02,
+      inflationGrowsWhilePlaying: true,
+      currentTrackId: null,
+      gameOver: false,
+      lastError: null,
+    });
     expect(config.textDisplay).toMatchObject({
       visible: false,
       enabled: true,
@@ -102,9 +121,7 @@ describe("Phase 1 shared protocol", () => {
   it("keeps the shipped audio assets addressable through dynamic track ids", () => {
     expect(AUDIO_URLS.track_01).toBe("/audio/boing.mp3");
     expect(AUDIO_URLS.track_02).toBe("/audio/womp-womp.mp3");
-    expect(AUDIO_URLS["Accident1.mp3"]).toBe(
-      "/audio/CitySounds/Accident1.mp3"
-    );
+    expect(AUDIO_URLS["Accident1.mp3"]).toBe("/audio/CitySounds/Accident1.mp3");
     expect(AUDIO_URLS["LightRain.mp3__2"]).toBe(
       "/audio/NatureSounds/LightRain.mp3"
     );

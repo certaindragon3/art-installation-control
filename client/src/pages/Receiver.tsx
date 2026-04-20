@@ -23,7 +23,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { usePostToUnity } from "@/hooks/usePostToUnity";
 import { useSocket } from "@/hooks/useSocket";
@@ -31,8 +30,10 @@ import { cn } from "@/lib/utils";
 import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
 import {
   clampNormalizedCoordinate,
+  calculateTrackCost,
   createDefaultReceiverConfig,
   evaluateTimingPress,
+  type EconomyConfig,
   type MapConfig,
   type PulseEvent,
   type TimingInteractionValue,
@@ -42,15 +43,17 @@ import {
 import {
   AudioLines,
   CheckCircle2,
+  Coins,
   Hexagon,
   Lock,
   Map as MapIcon,
   MessageSquare,
   Music,
+  Play,
+  Repeat,
   SlidersHorizontal,
   Target,
   Trophy,
-  Volume2,
   VolumeX,
   Wifi,
   WifiOff,
@@ -88,6 +91,53 @@ function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
 type ReceiverTimingResult = TimingInteractionValue & {
   isoTimestamp: string;
 };
+
+function resolveEconomyDisplay(economy: EconomyConfig, nowMs: number) {
+  const lastUpdatedAt = new Date(economy.lastUpdatedAt).getTime();
+  const elapsedSeconds = Number.isFinite(lastUpdatedAt)
+    ? Math.max(0, (nowMs - lastUpdatedAt) / 1000)
+    : 0;
+  const playing =
+    Boolean(economy.currentTrackId) &&
+    economy.playEndsAt !== null &&
+    nowMs < new Date(economy.playEndsAt).getTime();
+
+  if (economy.gameOver || !economy.enabled) {
+    return economy;
+  }
+
+  return {
+    ...economy,
+    currencySeconds: playing
+      ? economy.currencySeconds
+      : economy.currencySeconds + economy.earnRatePerSecond * elapsedSeconds,
+    inflation:
+      economy.inflation +
+      (economy.inflationGrowsWhilePlaying || !playing
+        ? economy.inflationGrowthPerSecond * elapsedSeconds
+        : 0),
+  };
+}
+
+function resolveTrackPlayProgress(
+  track: TrackState,
+  economy: EconomyConfig,
+  nowMs: number
+) {
+  if (
+    !track.playing ||
+    economy.currentTrackId !== track.trackId ||
+    !economy.playStartedAt ||
+    !economy.playEndsAt
+  ) {
+    return 0;
+  }
+
+  const startedAt = new Date(economy.playStartedAt).getTime();
+  const endsAt = new Date(economy.playEndsAt).getTime();
+  const durationMs = Math.max(1, endsAt - startedAt);
+  return Math.min(100, Math.max(0, ((nowMs - startedAt) / durationMs) * 100));
+}
 
 function resolveMapDisplayPosition(map: MapConfig, nowMs: number) {
   const movement = map.movement;
@@ -163,6 +213,10 @@ export default function Receiver() {
   const config = useMemo(
     () => receiverState?.config ?? createDefaultReceiverConfig(),
     [receiverState]
+  );
+  const economy = useMemo(
+    () => resolveEconomyDisplay(config.economy, nowMs),
+    [config.economy, nowMs]
   );
   const iconColor = config.visuals.iconColor;
   const pulseEnabled = config.pulse.enabled && config.pulse.active;
@@ -296,7 +350,7 @@ export default function Receiver() {
   }, [config.textDisplay.text]);
 
   useEffect(() => {
-    if (!pulseEnabled && !mapMovementActive) {
+    if (!pulseEnabled && !mapMovementActive && !config.economy.visible) {
       return;
     }
 
@@ -311,7 +365,7 @@ export default function Receiver() {
 
     frameId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frameId);
-  }, [mapMovementActive, pulseEnabled]);
+  }, [config.economy.visible, mapMovementActive, pulseEnabled]);
 
   useEffect(() => {
     return () => {
@@ -389,7 +443,14 @@ export default function Receiver() {
   const handlePlayToggle = useCallback(
     (track: TrackState) => {
       const nextPlaying = !track.playing;
-      dispatchTrackPatch(track.trackId, { playing: nextPlaying });
+      sendCommand({
+        command: nextPlaying ? "request_track_play" : "request_track_stop",
+        targetId: receiverId,
+        payload: {
+          trackId: track.trackId,
+        },
+        timestamp: new Date().toISOString(),
+      });
       postDiscreteInteraction({
         action: nextPlaying ? "play" : "pause",
         element: `track:${track.trackId}:transport`,
@@ -409,7 +470,7 @@ export default function Receiver() {
         setActiveVolumeTrackId(null);
       }
     },
-    [activeVolumeTrackId, dispatchTrackPatch, postDiscreteInteraction]
+    [activeVolumeTrackId, postDiscreteInteraction, receiverId, sendCommand]
   );
 
   const handleLoopToggle = useCallback(
@@ -513,22 +574,22 @@ export default function Receiver() {
   ]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border/60 bg-card/85 backdrop-blur">
+    <div className="dark min-h-screen bg-zinc-950 text-zinc-50">
+      <header className="border-b border-white/10 bg-zinc-950/90 backdrop-blur">
         <div className="container flex h-14 items-center justify-between">
           <div className="flex items-center gap-3">
             <div
-              className="flex size-9 items-center justify-center rounded-xl transition-colors duration-500"
+              className="flex size-9 items-center justify-center rounded-lg transition-colors duration-500"
               style={{ backgroundColor: `${iconColor}20` }}
             >
               <Hexagon style={{ color: iconColor }} />
             </div>
             <div>
               <h1 className="text-sm font-semibold">Receiver {receiverId}</h1>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-zinc-400">
                 {receiverIdWasAssigned
                   ? `Requested ${requestedReceiverId}, assigned ${receiverId}`
-                  : "Phase 6 score-, map-, vote-, and timing-aware interaction surface"}
+                  : "Choose sounds when you have enough seconds."}
               </p>
             </div>
           </div>
@@ -544,9 +605,9 @@ export default function Receiver() {
 
       <main className="container py-8">
         <div className="mx-auto max-w-4xl space-y-6">
-          <section className="flex flex-col items-center py-6">
+          <section className="flex flex-col items-center py-4">
             <div
-              className="flex h-32 w-32 items-center justify-center rounded-[2rem] shadow-lg transition-all duration-700"
+              className="flex h-28 w-28 items-center justify-center rounded-lg shadow-lg transition-all duration-700"
               style={{
                 backgroundColor: `${iconColor}15`,
                 boxShadow: `0 0 50px ${iconColor}30, 0 0 120px ${iconColor}12`,
@@ -560,12 +621,35 @@ export default function Receiver() {
                 }}
               />
             </div>
-            <p className="mt-4 text-xs text-muted-foreground">
-              config v{receiverState?.configVersion ?? 0} · expires{" "}
-              {receiverState?.configExpiresAt
-                ? new Date(receiverState.configExpiresAt).toLocaleTimeString()
-                : "--:--:--"}
-            </p>
+            <div className="mt-4 grid w-full max-w-sm grid-cols-3 gap-2">
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                <p className="text-[10px] uppercase text-zinc-400">Pool</p>
+                <p className="text-lg font-semibold">
+                  {economy.currencySeconds.toFixed(1)}s
+                </p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                <p className="text-[10px] uppercase text-zinc-400">Cost x</p>
+                <p className="text-lg font-semibold">
+                  {economy.inflation.toFixed(2)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                <p className="text-[10px] uppercase text-zinc-400">State</p>
+                <p className="truncate text-lg font-semibold">
+                  {economy.gameOver
+                    ? "Game Over"
+                    : economy.currentTrackId
+                      ? "Playing"
+                      : "Ready"}
+                </p>
+              </div>
+            </div>
+            {economy.lastError ? (
+              <p className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+                {economy.lastError.replace(/_/g, " ")}
+              </p>
+            ) : null}
           </section>
 
           {activeVote ? (
@@ -939,7 +1023,12 @@ export default function Receiver() {
                     <ReceiverTrackCard
                       key={track.trackId}
                       track={track}
-                      disabled={false}
+                      economy={economy}
+                      disabled={
+                        economy.gameOver ||
+                        !economy.enabled ||
+                        voteInteractionLocked
+                      }
                       activeVolumeTrackId={activeVolumeTrackId}
                       onPlayToggle={handlePlayToggle}
                       onLoopToggle={handleLoopToggle}
@@ -999,6 +1088,7 @@ export default function Receiver() {
 
 function ReceiverTrackCard({
   track,
+  economy,
   disabled,
   activeVolumeTrackId,
   onPlayToggle,
@@ -1012,6 +1102,7 @@ function ReceiverTrackCard({
   endContinuousInteraction,
 }: {
   track: TrackState;
+  economy: EconomyConfig;
   disabled: boolean;
   activeVolumeTrackId: string | null;
   onPlayToggle: (track: TrackState) => void;
@@ -1115,97 +1206,90 @@ function ReceiverTrackCard({
       nowMs - lastFillFlashAt < 220
   );
   const markerActive = pulseFlashActive || fillFlashActive;
+  const trackCost = calculateTrackCost(track, economy);
+  const playProgress = resolveTrackPlayProgress(track, economy, nowMs);
+  const displayedProgress = track.playing ? playProgress : fillProgress;
+  const canPlay =
+    !disabled &&
+    track.visible &&
+    track.enabled &&
+    track.playable &&
+    trackCost !== null &&
+    (!economy.currentTrackId || economy.currentTrackId === track.trackId);
 
   return (
     <div
       className={cn(
-        "rounded-xl border border-border/60 bg-card/80 p-4 transition-all duration-300",
+        "overflow-hidden rounded-lg border border-white/10 bg-white/[0.06] transition-all duration-300",
         markerActive &&
-          "border-primary/60 bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.08)]"
+          "border-white/25 bg-white/[0.09] shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
       )}
+      style={{ borderLeft: `4px solid ${track.categoryColor}` }}
     >
-      <div className="flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">{track.label}</span>
-              <Badge variant={track.playing ? "default" : "secondary"}>
-                {track.playing ? "Playing" : "Idle"}
-              </Badge>
-              {!track.playable ? (
-                <Badge variant="destructive">Unavailable</Badge>
-              ) : null}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {track.trackId} · volume {volumeValueToPercent(track.volumeValue)}
-              % · loop {track.loopEnabled ? "on" : "off"} · fill{" "}
-              {track.fillTime.toFixed(1)}s
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-3">
+        <Button
+          size="icon"
+          variant={track.playing ? "secondary" : "default"}
+          className="size-11 rounded-lg"
+          style={
+            track.playing
+              ? undefined
+              : {
+                  backgroundColor: track.categoryColor,
+                  color: "#0a0a0a",
+                }
+          }
+          disabled={!canPlay && !track.playing}
+          onClick={() => onPlayToggle(track)}
+        >
+          {track.playing ? <VolumeX /> : <Play />}
+          <span className="sr-only">{track.playing ? "Stop" : "Play"}</span>
+        </Button>
+
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-sm font-semibold text-zinc-50">
+              {track.label}
             </p>
-          </div>
-
-          <Button
-            size="sm"
-            variant={track.playing ? "secondary" : "default"}
-            disabled={disabled || !track.playable}
-            onClick={() => onPlayToggle(track)}
-          >
-            {track.playing ? (
-              <VolumeX data-icon="inline-start" />
-            ) : (
-              <Volume2 data-icon="inline-start" />
-            )}
-            {track.playing ? "Stop" : "Play"}
-          </Button>
-        </div>
-
-        <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "size-2.5 rounded-full transition-all duration-200",
-                  markerActive
-                    ? "bg-primary shadow-[0_0_0_6px_hsl(var(--primary)/0.18)]"
-                    : "bg-muted-foreground/30"
-                )}
-              />
-              <span className="text-sm font-medium">Tempo Marker</span>
-            </div>
-            <Badge variant={track.tempoFlashEnabled ? "secondary" : "outline"}>
-              {track.tempoFlashEnabled ? "Armed" : "Disabled"}
+            <Badge
+              variant={track.playing ? "default" : "secondary"}
+              className="shrink-0 rounded-md"
+            >
+              {track.playing ? "Playing" : "Ready"}
             </Badge>
           </div>
-          <Progress value={fillProgress} className="h-2.5" />
-          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-            <span>
-              {pulseEvent
-                ? `${pulseEvent.bpm} BPM · beat ${pulseEvent.sequence + 1}`
-                : "Waiting for server pulse"}
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400">
+            <span className="inline-flex items-center gap-1">
+              <Coins className="size-3" />
+              Cost {trackCost === null ? "--" : trackCost.toFixed(1)}s
             </span>
-            <span>{track.fillTime.toFixed(1)}s fill</span>
+            <span className="truncate">{track.categoryId}</span>
+            {!track.playable || !track.enabled ? (
+              <span className="text-red-300">Disabled</span>
+            ) : null}
           </div>
+          <Progress value={displayedProgress} className="mt-2 h-2" />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col items-end gap-2">
           {track.loopControlVisible ? (
             <Button
               size="sm"
               variant={track.loopEnabled ? "default" : "outline"}
+              className="h-8 rounded-lg px-2"
               disabled={disabled || track.loopControlLocked}
               onClick={() => onLoopToggle(track)}
             >
-              <AudioLines data-icon="inline-start" />
-              {track.loopControlLocked
-                ? "Loop Locked"
-                : track.loopEnabled
-                  ? "Loop On"
-                  : "Loop Off"}
+              <Repeat className="size-4" />
+              <span className="sr-only">
+                {track.loopEnabled ? "Loop On" : "Loop Off"}
+              </span>
             </Button>
           ) : (
             <Badge variant="outline">Loop Hidden</Badge>
           )}
 
-          {track.volumeControlEnabled ? (
+          {track.volumeControlVisible && track.volumeControlEnabled ? (
             <Popover
               open={volumeOpen}
               onOpenChange={open => {
@@ -1223,6 +1307,7 @@ function ReceiverTrackCard({
                 <Button
                   size="sm"
                   variant={volumeOpen ? "secondary" : "outline"}
+                  className="h-8 rounded-lg px-2"
                   disabled={
                     disabled || !track.playing || !track.volumeControlVisible
                   }
@@ -1233,7 +1318,7 @@ function ReceiverTrackCard({
               </PopoverTrigger>
               <PopoverContent
                 align="start"
-                className="w-[min(24rem,calc(100vw-2rem))] rounded-2xl p-5"
+                className="w-[min(24rem,calc(100vw-2rem))] rounded-lg p-5"
                 onInteractOutside={event => {
                   event.preventDefault();
                   onVolumeDismiss(track);
@@ -1246,7 +1331,7 @@ function ReceiverTrackCard({
                       Logarithmic gain mapping for performative control.
                     </p>
                   </div>
-                  <div className="rounded-2xl border border-border/60 bg-muted/35 p-4">
+                  <div className="rounded-lg border border-border/60 bg-muted/35 p-4">
                     <Slider
                       value={[track.volumeValue]}
                       min={0}
@@ -1278,9 +1363,9 @@ function ReceiverTrackCard({
                 </div>
               </PopoverContent>
             </Popover>
-          ) : (
+          ) : track.volumeControlVisible ? (
             <Badge variant="outline">Volume External</Badge>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

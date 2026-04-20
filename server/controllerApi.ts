@@ -30,6 +30,9 @@ const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
   "vote_reset_all",
   "score_reset",
   "reset_all_state",
+  "request_track_play",
+  "request_track_stop",
+  "economy_reset",
 ]);
 
 const MODULE_NAMES = new Set<ModuleName>([
@@ -39,6 +42,7 @@ const MODULE_NAMES = new Set<ModuleName>([
   "timing",
   "textDisplay",
   "visuals",
+  "economy",
 ]);
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -391,6 +395,42 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
     case "reset_all_state": {
       return {
         command: "reset_all_state",
+        targetId: body.targetId.trim(),
+        payload: {},
+        timestamp,
+      };
+    }
+    case "request_track_play": {
+      if (!isRecord(body.payload) || typeof body.payload.trackId !== "string") {
+        return null;
+      }
+
+      return {
+        command: "request_track_play",
+        targetId: body.targetId.trim(),
+        payload: {
+          trackId: body.payload.trackId,
+        },
+        timestamp,
+      };
+    }
+    case "request_track_stop": {
+      if (!isRecord(body.payload) || typeof body.payload.trackId !== "string") {
+        return null;
+      }
+
+      return {
+        command: "request_track_stop",
+        targetId: body.targetId.trim(),
+        payload: {
+          trackId: body.payload.trackId,
+        },
+        timestamp,
+      };
+    }
+    case "economy_reset": {
+      return {
+        command: "economy_reset",
         targetId: body.targetId.trim(),
         payload: {},
         timestamp,

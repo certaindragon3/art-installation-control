@@ -429,7 +429,79 @@ CitySounds/LightRain.mp3    -> LightRain.mp3
 NatureSounds/LightRain.mp3  -> LightRain.mp3__2
 ```
 
-Play `track_01`:
+### Student Playback Economy
+
+Formal student playback now uses `request_track_play` / `request_track_stop`.
+The server checks receiver currency, track duration, inflation, vote lock, and
+game-over state before turning audio on.
+
+Let `screen-a` request `track_01`:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "request_track_play",
+    "targetId": "screen-a",
+    "payload": {
+      "trackId": "track_01"
+    }
+  }'
+```
+
+Stop `track_01` from the economy flow:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "request_track_stop",
+    "targetId": "screen-a",
+    "payload": {
+      "trackId": "track_01"
+    }
+  }'
+```
+
+Reset / revive a receiver economy after game over:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "economy_reset",
+    "targetId": "screen-a",
+    "payload": {}
+  }'
+```
+
+Tune economy parameters:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_module_state",
+    "targetId": "screen-a",
+    "payload": {
+      "module": "economy",
+      "patch": {
+        "startingSeconds": 30,
+        "currencySeconds": 30,
+        "earnRatePerSecond": 1,
+        "inflationGrowthPerSecond": 0.02,
+        "inflationGrowsWhilePlaying": true
+      }
+    }
+  }'
+```
+
+### Operator Manual Playback
+
+Manual play / pause remains available for operator debugging and emergency
+control. Student receiver UI does not use this command to start audio.
+
+Manually play `track_01`:
 
 ```bash
 curl -X POST "$BASE_URL/api/controller/command" \
@@ -446,7 +518,7 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
-Pause `track_01`:
+Manually pause `track_01`:
 
 ```bash
 curl -X POST "$BASE_URL/api/controller/command" \
@@ -463,7 +535,37 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
-## 10. Reset Everything
+## 10. Unity JSON Duration Guidance
+
+For generated Unity cue JSON, keep each segment at or under 10 seconds. Longer
+motion should be represented as `loop: true` or split into multiple segments.
+The runtime API still accepts longer durations for manual testing.
+
+Recommended movement example:
+
+```json
+{
+  "command": "set_module_state",
+  "targetId": "screen-a",
+  "payload": {
+    "module": "map",
+    "patch": {
+      "visible": true,
+      "enabled": true,
+      "movement": {
+        "fromX": 0.1,
+        "fromY": 0.8,
+        "toX": 0.9,
+        "toY": 0.2,
+        "durationMs": 5000,
+        "loop": true
+      }
+    }
+  }
+}
+```
+
+## 11. Reset Everything
 
 Reset all state on one receiver:
 
@@ -489,7 +591,7 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
-## 11. Suggested Quick Test Order
+## 12. Suggested Quick Test Order
 
 1. `GET /api/controller/receivers`
 2. Create a group
@@ -499,4 +601,5 @@ curl -X POST "$BASE_URL/api/controller/command" \
 6. Enable timing challenge
 7. Open `/receiver/:id` and try the timing button
 8. Export timing results
-9. Reset all
+9. Request a track from receiver UI and confirm currency decreases
+10. Reset all

@@ -3,16 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Zap,
-  Monitor,
-  Radio,
-  ArrowRight,
-  Hexagon,
-  Music,
-  Palette,
-  MessageSquare,
-} from "lucide-react";
+import { Monitor, Radio, ArrowRight, Hexagon } from "lucide-react";
 
 const RECEIVER_ID_STORAGE_KEY = "art-installation:last-receiver-id";
 
@@ -33,10 +24,7 @@ export default function Home() {
     }
 
     if (trimmedReceiverId) {
-      window.localStorage.setItem(
-        RECEIVER_ID_STORAGE_KEY,
-        trimmedReceiverId
-      );
+      window.localStorage.setItem(RECEIVER_ID_STORAGE_KEY, trimmedReceiverId);
       return;
     }
 
@@ -65,9 +53,7 @@ export default function Home() {
               <span className="text-primary">Control System</span>
             </h1>
             <p className="text-lg text-muted-foreground max-w-xl mx-auto">
-              A real-time WebSocket-based control system for interactive art
-              installations. One controller, multiple receivers, independent
-              control per device.
+              Enter your assigned screen name to join the shared sound space.
             </p>
           </div>
         </div>
@@ -76,43 +62,7 @@ export default function Home() {
       {/* Role Selection */}
       <div className="container pb-20">
         <div className="max-w-4xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-            {/* Controller Card */}
-            <Card className="group hover:border-primary/30 transition-all hover:shadow-lg">
-              <CardHeader>
-                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-3 group-hover:bg-primary/15 transition-colors">
-                  <Zap className="w-6 h-6 text-primary" />
-                </div>
-                <CardTitle className="text-xl">Controller</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  The central control panel. Manage all connected receivers,
-                  send audio commands, change colors, and broadcast messages.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline" className="text-xs">
-                    <Music className="w-3 h-3 mr-1" />
-                    Audio
-                  </Badge>
-                  <Badge variant="outline" className="text-xs">
-                    <Palette className="w-3 h-3 mr-1" />
-                    Color
-                  </Badge>
-                  <Badge variant="outline" className="text-xs">
-                    <MessageSquare className="w-3 h-3 mr-1" />
-                    Text
-                  </Badge>
-                </div>
-                <Link href="/controller">
-                  <Button className="w-full mt-2 group-hover:bg-primary/90">
-                    Open Controller
-                    <ArrowRight className="w-4 h-4 ml-2" />
-                  </Button>
-                </Link>
-              </CardContent>
-            </Card>
-
+          <div className="mb-12 grid grid-cols-1 gap-6">
             {/* Receiver Card */}
             <Card className="group hover:border-primary/30 transition-all hover:shadow-lg">
               <CardHeader>
@@ -123,17 +73,15 @@ export default function Home() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                  A terminal endpoint that receives and displays commands. Each
-                  receiver has a unique ID for independent control.
+                  Each screen keeps its own color, position, seconds, and sound
+                  choices.
                 </p>
                 <div className="space-y-2">
                   <input
                     type="text"
                     value={receiverId}
-                    onChange={(e) => setReceiverId(e.target.value)}
-                    onKeyDown={(e) =>
-                      e.key === "Enter" && handleJoinAsReceiver()
-                    }
+                    onChange={e => setReceiverId(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && handleJoinAsReceiver()}
                     placeholder="Enter Receiver ID"
                     className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
@@ -164,44 +112,24 @@ export default function Home() {
             </Card>
           </div>
 
-          {/* Architecture Overview */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">System Architecture</CardTitle>
+              <CardTitle className="text-base">How To Join</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-                <div className="p-4 rounded-lg bg-muted/50">
-                  <Zap className="w-8 h-8 mx-auto mb-2 text-primary" />
-                  <p className="font-medium text-sm">Controller</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    /controller
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Sends targeted commands
-                  </p>
-                </div>
-                <div className="p-4 rounded-lg bg-muted/50 flex flex-col items-center justify-center">
-                  <div className="text-xs text-muted-foreground mb-1">
-                    WebSocket (Socket.IO)
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-8 h-px bg-primary" />
-                    <ArrowRight className="w-3 h-3 text-primary" />
-                  </div>
-                  <p className="font-medium text-sm mt-1">Server</p>
-                  <p className="text-xs text-muted-foreground">
-                    Routes messages by targetId
-                  </p>
-                </div>
+              <div className="grid grid-cols-1 gap-4 text-center md:grid-cols-2">
                 <div className="p-4 rounded-lg bg-muted/50">
                   <Monitor className="w-8 h-8 mx-auto mb-2 text-primary" />
-                  <p className="font-medium text-sm">Receivers</p>
+                  <p className="font-medium text-sm">Use Your Screen Name</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    /receiver/:id
+                    Example: A, B, entrance, window
                   </p>
+                </div>
+                <div className="p-4 rounded-lg bg-muted/50">
+                  <Hexagon className="w-8 h-8 mx-auto mb-2 text-primary" />
+                  <p className="font-medium text-sm">Stay On This Page</p>
                   <p className="text-xs text-muted-foreground">
-                    Execute commands independently
+                    The installation updates your screen automatically.
                   </p>
                 </div>
               </div>

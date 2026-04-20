@@ -60,6 +60,9 @@ export interface TrackState extends VisibilityConfig {
   trackId: string;
   label: string;
   url: string;
+  durationSeconds: number;
+  categoryId: string;
+  categoryColor: string;
   playing: boolean;
   playable: boolean;
   loopEnabled: boolean;
@@ -176,6 +179,22 @@ export interface VisualConfig extends VisibilityConfig {
   iconColor: string;
 }
 
+export interface EconomyConfig extends VisibilityConfig {
+  currencySeconds: number;
+  startingSeconds: number;
+  earnRatePerSecond: number;
+  refreshIntervalMs: number;
+  inflation: number;
+  inflationGrowthPerSecond: number;
+  inflationGrowsWhilePlaying: boolean;
+  currentTrackId: string | null;
+  playStartedAt: string | null;
+  playEndsAt: string | null;
+  gameOver: boolean;
+  lastUpdatedAt: string;
+  lastError: string | null;
+}
+
 export interface ReceiverConfig {
   tracks: TrackState[];
   groups: GroupState[];
@@ -186,6 +205,7 @@ export interface ReceiverConfig {
   timing: TimingConfig;
   textDisplay: TextDisplayConfig;
   visuals: VisualConfig;
+  economy: EconomyConfig;
 }
 
 export type ModuleName =
@@ -194,7 +214,8 @@ export type ModuleName =
   | "map"
   | "timing"
   | "textDisplay"
-  | "visuals";
+  | "visuals"
+  | "economy";
 
 // ─── Unified Commands ────────────────────────────────────────────────
 export interface SetTrackStatePayload {
@@ -238,6 +259,16 @@ export interface SubmitVotePayload {
 export interface ScoreResetPayload extends JsonRecord {}
 
 export interface ResetAllStatePayload extends JsonRecord {}
+
+export interface RequestTrackPlayPayload {
+  trackId: string;
+}
+
+export interface RequestTrackStopPayload {
+  trackId: string;
+}
+
+export interface EconomyResetPayload extends JsonRecord {}
 
 export type UnifiedCommand =
   | {
@@ -298,6 +329,24 @@ export type UnifiedCommand =
       command: "reset_all_state";
       targetId: string;
       payload: ResetAllStatePayload;
+      timestamp: string;
+    }
+  | {
+      command: "request_track_play";
+      targetId: string;
+      payload: RequestTrackPlayPayload;
+      timestamp: string;
+    }
+  | {
+      command: "request_track_stop";
+      targetId: string;
+      payload: RequestTrackStopPayload;
+      timestamp: string;
+    }
+  | {
+      command: "economy_reset";
+      targetId: string;
+      payload: EconomyResetPayload;
       timestamp: string;
     };
 
@@ -404,6 +453,7 @@ export const CONFIG_TTL_MS = 60_000;
 export const DEFAULT_ICON_COLOR = "#6366f1";
 export const DEFAULT_TIMING_TARGET_CENTER = 0.5;
 export const DEFAULT_TIMING_TOLERANCE = 0.08;
+export const DEFAULT_TRACK_CATEGORY_COLOR = "#64748b";
 
 export function clampNormalizedCoordinate(value: number, fallback = 0.5) {
   if (!Number.isFinite(value)) {
@@ -483,6 +533,9 @@ export interface TrackDefinition {
   trackId: string;
   label: string;
   url: string;
+  durationSeconds: number;
+  categoryId: string;
+  categoryColor: string;
 }
 
 export const DEFAULT_TRACK_LIBRARY: readonly TrackDefinition[] =
@@ -495,6 +548,39 @@ export const AUDIO_URLS = DEFAULT_TRACK_LIBRARY.reduce<Record<string, string>>(
   },
   {}
 );
+
+export function createDefaultEconomyConfig(
+  nowIso = new Date().toISOString()
+): EconomyConfig {
+  return {
+    visible: true,
+    enabled: true,
+    currencySeconds: 30,
+    startingSeconds: 30,
+    earnRatePerSecond: 1,
+    refreshIntervalMs: 30_000,
+    inflation: 1,
+    inflationGrowthPerSecond: 0.02,
+    inflationGrowsWhilePlaying: true,
+    currentTrackId: null,
+    playStartedAt: null,
+    playEndsAt: null,
+    gameOver: false,
+    lastUpdatedAt: nowIso,
+    lastError: null,
+  };
+}
+
+export function calculateTrackCost(
+  track: Pick<TrackState, "durationSeconds">,
+  economy: Pick<EconomyConfig, "inflation">
+) {
+  if (!Number.isFinite(track.durationSeconds) || track.durationSeconds <= 0) {
+    return null;
+  }
+
+  return track.durationSeconds * Math.max(0, economy.inflation);
+}
 
 export function createDefaultTracks(): TrackState[] {
   return DEFAULT_TRACK_LIBRARY.map(track => ({
@@ -558,6 +644,7 @@ export function createDefaultReceiverConfig(): ReceiverConfig {
       enabled: true,
       iconColor: DEFAULT_ICON_COLOR,
     },
+    economy: createDefaultEconomyConfig(),
   };
 }
 

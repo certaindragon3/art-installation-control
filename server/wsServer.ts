@@ -7,10 +7,12 @@ import {
   type PulseScheduler,
 } from "./pulseScheduler";
 import {
+  calculateTrackCost,
   clampTimingTolerance,
   clampNormalizedCoordinate,
   CONFIG_TTL_MS,
   type ControlInputMessage,
+  createDefaultEconomyConfig,
   createDefaultReceiverConfig,
   type GroupState,
   type MapMovementConfig,
@@ -20,6 +22,8 @@ import {
   type ReceiverState,
   type RemoveGroupPayload,
   type RemoveTrackPayload,
+  type RequestTrackPlayPayload,
+  type RequestTrackStopPayload,
   type SetGroupStatePayload,
   type SetModuleStatePayload,
   type SetTrackStatePayload,
@@ -70,11 +74,14 @@ const RECEIVER_CLEANUP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_MAP_MOVEMENT_DURATION_MS = 20_000;
 const MIN_MAP_MOVEMENT_DURATION_MS = 100;
 const MAX_MAP_MOVEMENT_DURATION_MS = 10 * 60 * 1000;
+const MANUAL_TRACK_CATEGORY_ID = "manual";
+const MANUAL_TRACK_CATEGORY_COLOR = "#64748b";
 
 const receivers = new Map<string, InternalReceiverState>();
 const controllers = new Set<string>();
 const unities = new Set<string>();
 const pulseLoops = new Map<string, PulseScheduler>();
+const economyPlayTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const voteSessions = new Map<string, VoteSession>();
 const receiverActiveVotes = new Map<string, string>();
 const timingEvents: TimingEventExport[] = [];
@@ -104,6 +111,9 @@ function serializeReceiverState(
   state: InternalReceiverState,
   now = Date.now()
 ): ReceiverState {
+  advanceEconomy(state, now);
+  scheduleEconomyPlayTimeout(state.receiverId, state);
+
   return {
     receiverId: state.receiverId,
     label: state.label,
@@ -121,6 +131,325 @@ function emitReceiverState(socket: Socket, state: InternalReceiverState) {
 
 function receiverRoom(receiverId: string) {
   return `receiver:${receiverId}`;
+}
+
+function parseIsoMs(value: string | null, fallback: number) {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampNonNegativeNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : fallback;
+}
+
+function clearEconomyPlayTimeout(receiverId: string) {
+  const timeout = economyPlayTimeouts.get(receiverId);
+  if (!timeout) {
+    return;
+  }
+
+  clearTimeout(timeout);
+  economyPlayTimeouts.delete(receiverId);
+}
+
+function scheduleEconomyPlayTimeout(
+  receiverId: string,
+  state: InternalReceiverState
+) {
+  clearEconomyPlayTimeout(receiverId);
+
+  const endsAtMs = parseIsoMs(state.config.economy.playEndsAt, NaN);
+  if (
+    !state.connected ||
+    !state.config.economy.currentTrackId ||
+    !Number.isFinite(endsAtMs)
+  ) {
+    return;
+  }
+
+  const waitMs = Math.max(0, endsAtMs - Date.now());
+  const timeout = setTimeout(() => {
+    const currentState = receivers.get(receiverId);
+    if (!currentState) {
+      clearEconomyPlayTimeout(receiverId);
+      return;
+    }
+
+    if (advanceEconomy(currentState)) {
+      incrementConfigVersion(currentState);
+      emitReceiverStateToRoom(receiverId, currentState);
+      broadcastReceiverList();
+    }
+
+    scheduleEconomyPlayTimeout(receiverId, currentState);
+  }, waitMs);
+  economyPlayTimeouts.set(receiverId, timeout);
+}
+
+function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
+  const economy = state.config.economy;
+  const previousSnapshot = JSON.stringify({
+    currencySeconds: economy.currencySeconds,
+    inflation: economy.inflation,
+    currentTrackId: economy.currentTrackId,
+    playStartedAt: economy.playStartedAt,
+    playEndsAt: economy.playEndsAt,
+    gameOver: economy.gameOver,
+    lastUpdatedAt: economy.lastUpdatedAt,
+    playingTracks: state.config.tracks
+      .filter(track => track.playing)
+      .map(track => track.trackId),
+  });
+
+  const lastUpdatedAtMs = parseIsoMs(economy.lastUpdatedAt, now);
+  const elapsedSeconds = Math.max(0, (now - lastUpdatedAtMs) / 1000);
+
+  if (economy.gameOver || !economy.enabled) {
+    return false;
+  }
+
+  const currentTrack = economy.currentTrackId
+    ? getTrack(state, economy.currentTrackId)
+    : undefined;
+  if (economy.currentTrackId && (!currentTrack || !currentTrack.playing)) {
+    economy.currentTrackId = null;
+    economy.playStartedAt = null;
+    economy.playEndsAt = null;
+  }
+
+  const playEndsAtMs = parseIsoMs(economy.playEndsAt, NaN);
+  const playing =
+    Boolean(economy.currentTrackId) &&
+    Number.isFinite(playEndsAtMs) &&
+    now < playEndsAtMs;
+  const playShouldEnd =
+    Boolean(economy.currentTrackId) &&
+    Number.isFinite(playEndsAtMs) &&
+    playEndsAtMs <= now;
+
+  if (elapsedSeconds < 0.05 && !playShouldEnd) {
+    return (
+      previousSnapshot !==
+      JSON.stringify({
+        currencySeconds: economy.currencySeconds,
+        inflation: economy.inflation,
+        currentTrackId: economy.currentTrackId,
+        playStartedAt: economy.playStartedAt,
+        playEndsAt: economy.playEndsAt,
+        gameOver: economy.gameOver,
+        lastUpdatedAt: economy.lastUpdatedAt,
+        playingTracks: state.config.tracks
+          .filter(track => track.playing)
+          .map(track => track.trackId),
+      })
+    );
+  }
+
+  if (elapsedSeconds > 0) {
+    if (playing) {
+      if (economy.inflationGrowsWhilePlaying) {
+        economy.inflation += economy.inflationGrowthPerSecond * elapsedSeconds;
+      }
+    } else if (
+      economy.currentTrackId &&
+      Number.isFinite(playEndsAtMs) &&
+      playEndsAtMs <= now
+    ) {
+      const playingElapsedSeconds = Math.max(
+        0,
+        (playEndsAtMs - lastUpdatedAtMs) / 1000
+      );
+      const idleElapsedSeconds = Math.max(0, (now - playEndsAtMs) / 1000);
+      if (economy.inflationGrowsWhilePlaying) {
+        economy.inflation +=
+          economy.inflationGrowthPerSecond *
+          (playingElapsedSeconds + idleElapsedSeconds);
+      } else {
+        economy.inflation +=
+          economy.inflationGrowthPerSecond * idleElapsedSeconds;
+      }
+      economy.currencySeconds += economy.earnRatePerSecond * idleElapsedSeconds;
+      const endingTrack = getTrack(state, economy.currentTrackId);
+      if (endingTrack) {
+        endingTrack.playing = false;
+      }
+      economy.currentTrackId = null;
+      economy.playStartedAt = null;
+      economy.playEndsAt = null;
+    } else {
+      economy.currencySeconds += economy.earnRatePerSecond * elapsedSeconds;
+      economy.inflation += economy.inflationGrowthPerSecond * elapsedSeconds;
+    }
+  }
+
+  economy.currencySeconds = Math.max(0, economy.currencySeconds);
+  economy.inflation = Math.max(0, economy.inflation);
+  economy.lastUpdatedAt = new Date(now).toISOString();
+
+  return (
+    previousSnapshot !==
+    JSON.stringify({
+      currencySeconds: economy.currencySeconds,
+      inflation: economy.inflation,
+      currentTrackId: economy.currentTrackId,
+      playStartedAt: economy.playStartedAt,
+      playEndsAt: economy.playEndsAt,
+      gameOver: economy.gameOver,
+      lastUpdatedAt: economy.lastUpdatedAt,
+      playingTracks: state.config.tracks
+        .filter(track => track.playing)
+        .map(track => track.trackId),
+    })
+  );
+}
+
+function resetEconomy(state: InternalReceiverState) {
+  const current = state.config.economy;
+  const nowIso = new Date().toISOString();
+  state.config.economy = {
+    ...createDefaultEconomyConfig(nowIso),
+    visible: current.visible,
+    enabled: current.enabled,
+    startingSeconds: current.startingSeconds,
+    currencySeconds: current.startingSeconds,
+    earnRatePerSecond: current.earnRatePerSecond,
+    refreshIntervalMs: current.refreshIntervalMs,
+    inflationGrowthPerSecond: current.inflationGrowthPerSecond,
+    inflationGrowsWhilePlaying: current.inflationGrowsWhilePlaying,
+  };
+  stopAllTracks(state);
+  return true;
+}
+
+function triggerEconomyGameOver(
+  state: InternalReceiverState,
+  reason: string,
+  now = Date.now()
+) {
+  const economy = state.config.economy;
+  economy.currencySeconds = 0;
+  economy.currentTrackId = null;
+  economy.playStartedAt = null;
+  economy.playEndsAt = null;
+  economy.gameOver = true;
+  economy.lastError = reason;
+  economy.lastUpdatedAt = new Date(now).toISOString();
+  stopAllTracks(state);
+}
+
+function isVoteLockActive(state: InternalReceiverState) {
+  return Boolean(state.config.vote?.visible && state.config.vote.enabled);
+}
+
+function rejectEconomyRequest(
+  state: InternalReceiverState,
+  reason: string,
+  now = Date.now()
+) {
+  state.config.economy.lastError = reason;
+  state.config.economy.lastUpdatedAt = new Date(now).toISOString();
+  return true;
+}
+
+function requestTrackPlay(
+  state: InternalReceiverState,
+  payload: RequestTrackPlayPayload
+) {
+  const now = Date.now();
+  advanceEconomy(state, now);
+  const economy = state.config.economy;
+  const track = getTrack(state, payload.trackId);
+
+  if (!economy.enabled) {
+    return rejectEconomyRequest(state, "economy_disabled", now);
+  }
+
+  if (economy.gameOver) {
+    return rejectEconomyRequest(state, "game_over", now);
+  }
+
+  if (isVoteLockActive(state)) {
+    return rejectEconomyRequest(state, "vote_lock", now);
+  }
+
+  if (!track || !track.visible) {
+    return rejectEconomyRequest(state, "track_hidden", now);
+  }
+
+  if (!track.url || track.durationSeconds <= 0) {
+    return rejectEconomyRequest(state, "missing_duration", now);
+  }
+
+  if (!track.enabled || !track.playable) {
+    return rejectEconomyRequest(state, "track_disabled", now);
+  }
+
+  if (
+    economy.currentTrackId ||
+    state.config.tracks.some(item => item.playing)
+  ) {
+    return rejectEconomyRequest(state, "already_playing", now);
+  }
+
+  const cost = calculateTrackCost(track, economy);
+  if (cost === null) {
+    return rejectEconomyRequest(state, "missing_duration", now);
+  }
+
+  if (economy.currencySeconds - cost < 0) {
+    triggerEconomyGameOver(state, "insufficient_currency", now);
+    return true;
+  }
+
+  economy.currencySeconds -= cost;
+  economy.currentTrackId = track.trackId;
+  economy.playStartedAt = new Date(now).toISOString();
+  economy.playEndsAt = new Date(
+    now + track.durationSeconds * 1000
+  ).toISOString();
+  economy.gameOver = false;
+  economy.lastError = null;
+  economy.lastUpdatedAt = new Date(now).toISOString();
+
+  state.config.tracks.forEach(item => {
+    item.playing = item.trackId === track.trackId;
+  });
+
+  return true;
+}
+
+function requestTrackStop(
+  state: InternalReceiverState,
+  payload: RequestTrackStopPayload
+) {
+  const now = Date.now();
+  advanceEconomy(state, now);
+  const track = getTrack(state, payload.trackId);
+  const economy = state.config.economy;
+  const changed =
+    Boolean(track?.playing) ||
+    economy.currentTrackId === payload.trackId ||
+    economy.lastError !== null;
+
+  if (track) {
+    track.playing = false;
+  }
+
+  if (economy.currentTrackId === payload.trackId) {
+    economy.currentTrackId = null;
+    economy.playStartedAt = null;
+    economy.playEndsAt = null;
+  }
+
+  economy.lastError = null;
+  economy.lastUpdatedAt = new Date(now).toISOString();
+  return changed;
 }
 
 function emitReceiverStateToRoom(
@@ -592,9 +921,22 @@ function canSendControlCommands(socket: Socket, input: ControlInputMessage) {
   }
 
   const command = normalizeCommand(input);
+  if (
+    command.targetId !== socket.data.receiverId ||
+    (command.command !== "set_track_state" &&
+      command.command !== "request_track_play" &&
+      command.command !== "request_track_stop")
+  ) {
+    return false;
+  }
+
+  if (command.command === "set_track_state") {
+    return command.payload.patch.playing !== true;
+  }
+
   return (
-    command.command === "set_track_state" &&
-    command.targetId === socket.data.receiverId
+    command.command === "request_track_play" ||
+    command.command === "request_track_stop"
   );
 }
 
@@ -627,6 +969,19 @@ function createTrackFromPatch(
     trackId,
     label: typeof patch.label === "string" ? patch.label : trackId,
     url: typeof patch.url === "string" ? patch.url : "",
+    durationSeconds:
+      typeof patch.durationSeconds === "number" &&
+      Number.isFinite(patch.durationSeconds)
+        ? Math.max(0, patch.durationSeconds)
+        : 0,
+    categoryId:
+      typeof patch.categoryId === "string" && patch.categoryId.trim()
+        ? patch.categoryId.trim()
+        : MANUAL_TRACK_CATEGORY_ID,
+    categoryColor:
+      typeof patch.categoryColor === "string" && patch.categoryColor.trim()
+        ? patch.categoryColor.trim()
+        : MANUAL_TRACK_CATEGORY_COLOR,
     visible: typeof patch.visible === "boolean" ? patch.visible : true,
     enabled: typeof patch.enabled === "boolean" ? patch.enabled : true,
     playing: typeof patch.playing === "boolean" ? patch.playing : false,
@@ -749,6 +1104,13 @@ function applyTrackPatch(
     if (existing.playable === false) {
       existing.playing = false;
     }
+    existing.durationSeconds = Math.max(0, existing.durationSeconds);
+    if (!existing.categoryId.trim()) {
+      existing.categoryId = MANUAL_TRACK_CATEGORY_ID;
+    }
+    if (!existing.categoryColor.trim()) {
+      existing.categoryColor = MANUAL_TRACK_CATEGORY_COLOR;
+    }
     existing.volumeValue = clampVolumeValue(existing.volumeValue);
     existing.fillTime = Math.max(0, existing.fillTime);
     if ("groupId" in payload.patch) {
@@ -780,6 +1142,11 @@ function applyVisibleTracks(
 
     if (!nextVisible && track.playing) {
       track.playing = false;
+      if (state.config.economy.currentTrackId === track.trackId) {
+        state.config.economy.currentTrackId = null;
+        state.config.economy.playStartedAt = null;
+        state.config.economy.playEndsAt = null;
+      }
       changed = true;
     }
   });
@@ -1134,10 +1501,77 @@ function assignTimingPatch(
   return true;
 }
 
+function assignEconomyPatch(
+  state: InternalReceiverState,
+  patch: SetModuleStatePayload["patch"]
+) {
+  advanceEconomy(state);
+  const economy = state.config.economy;
+
+  if (typeof patch.visible === "boolean") {
+    economy.visible = patch.visible;
+  }
+
+  if (typeof patch.enabled === "boolean") {
+    economy.enabled = patch.enabled;
+    if (!patch.enabled) {
+      stopAllTracks(state);
+    }
+  }
+
+  economy.startingSeconds = clampNonNegativeNumber(
+    patch.startingSeconds,
+    economy.startingSeconds
+  );
+  economy.currencySeconds = clampNonNegativeNumber(
+    patch.currencySeconds,
+    economy.currencySeconds
+  );
+  economy.earnRatePerSecond = clampNonNegativeNumber(
+    patch.earnRatePerSecond,
+    economy.earnRatePerSecond
+  );
+  economy.refreshIntervalMs = Math.max(
+    1000,
+    clampNonNegativeNumber(patch.refreshIntervalMs, economy.refreshIntervalMs)
+  );
+  economy.inflation = clampNonNegativeNumber(
+    patch.inflation,
+    economy.inflation
+  );
+  economy.inflationGrowthPerSecond = clampNonNegativeNumber(
+    patch.inflationGrowthPerSecond,
+    economy.inflationGrowthPerSecond
+  );
+
+  if (typeof patch.inflationGrowsWhilePlaying === "boolean") {
+    economy.inflationGrowsWhilePlaying = patch.inflationGrowsWhilePlaying;
+  }
+
+  if (typeof patch.gameOver === "boolean") {
+    economy.gameOver = patch.gameOver;
+    if (patch.gameOver) {
+      stopAllTracks(state);
+    }
+  }
+
+  if (typeof patch.lastError === "string") {
+    economy.lastError = patch.lastError;
+  } else if (patch.lastError === null) {
+    economy.lastError = null;
+  }
+
+  economy.lastUpdatedAt = new Date().toISOString();
+  return true;
+}
+
 function stopAllTracks(state: InternalReceiverState) {
   state.config.tracks.forEach(track => {
     track.playing = false;
   });
+  state.config.economy.currentTrackId = null;
+  state.config.economy.playStartedAt = null;
+  state.config.economy.playEndsAt = null;
 }
 
 function applyCommand(
@@ -1174,6 +1608,9 @@ function applyCommand(
       if (command.payload.module === "timing") {
         return assignTimingPatch(state, command.payload.patch);
       }
+      if (command.payload.module === "economy") {
+        return assignEconomyPatch(state, command.payload.patch);
+      }
       return false;
     case "set_vote_state":
       return applyVoteState(state, command.payload.vote);
@@ -1189,6 +1626,12 @@ function applyCommand(
     case "reset_all_state":
       state.config = createDefaultReceiverConfig();
       return true;
+    case "request_track_play":
+      return requestTrackPlay(state, command.payload);
+    case "request_track_stop":
+      return requestTrackStop(state, command.payload);
+    case "economy_reset":
+      return resetEconomy(state);
   }
 }
 
@@ -1249,6 +1692,7 @@ function removeDisconnectedReceivers(): string[] {
   receivers.forEach((state, receiverId) => {
     if (!state.connected) {
       destroyPulseLoop(receiverId);
+      clearEconomyPlayTimeout(receiverId);
       dropReceiverFromVoteSessions(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
@@ -1267,6 +1711,7 @@ function removeExpiredReceivers(now = Date.now()): string[] {
       now - state.disconnectedAt >= RECEIVER_RETENTION_MS
     ) {
       destroyPulseLoop(receiverId);
+      clearEconomyPlayTimeout(receiverId);
       dropReceiverFromVoteSessions(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
@@ -1605,6 +2050,7 @@ function detachSocketFromPreviousReceiver(
     previousState.connected = false;
     previousState.disconnectedAt = Date.now();
     stopAllTracks(previousState);
+    clearEconomyPlayTimeout(previousReceiverId);
     incrementConfigVersion(previousState);
     syncPulseLoop(previousReceiverId, previousState);
   }
@@ -1667,6 +2113,7 @@ function registerReceiver(socket: Socket, data: ReceiverRegistration) {
 
   socket.join(receiverRoom(receiverId));
   syncPulseLoop(receiverId, receivers.get(receiverId)!);
+  scheduleEconomyPlayTimeout(receiverId, receivers.get(receiverId)!);
   emitReceiverState(socket, receivers.get(receiverId)!);
   broadcastReceiverList();
 }
@@ -1680,6 +2127,7 @@ function handleDisconnect(socket: Socket) {
       state.connected = false;
       state.disconnectedAt = Date.now();
       stopAllTracks(state);
+      clearEconomyPlayTimeout(state.receiverId);
       incrementConfigVersion(state);
       syncPulseLoop(state.receiverId, state);
     }
@@ -1815,6 +2263,7 @@ export function dispatchControlMessage(
       }
 
       syncPulseLoop(receiverId, state);
+      scheduleEconomyPlayTimeout(receiverId, state);
       io!
         .to(receiverRoom(receiverId))
         .emit(WS_EVENTS.RECEIVER_COMMAND, command);
@@ -1852,6 +2301,7 @@ export function dispatchControlMessage(
   }
 
   syncPulseLoop(command.targetId, state);
+  scheduleEconomyPlayTimeout(command.targetId, state);
   io.to(receiverRoom(command.targetId)).emit(
     WS_EVENTS.RECEIVER_COMMAND,
     command
@@ -1887,6 +2337,8 @@ export async function resetWebSocketState() {
   unities.clear();
   pulseLoops.forEach(loop => loop.stop());
   pulseLoops.clear();
+  economyPlayTimeouts.forEach(timeout => clearTimeout(timeout));
+  economyPlayTimeouts.clear();
   voteSessions.forEach(session => clearVoteTimeout(session));
   voteSessions.clear();
   receiverActiveVotes.clear();

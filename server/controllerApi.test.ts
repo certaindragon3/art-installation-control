@@ -1613,6 +1613,191 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("lets a receiver request server-authorized economy playback", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "economy-a",
+      label: "Economy A",
+    });
+    await initialStatePromise;
+
+    const track = DEFAULT_TRACK_LIBRARY.find(
+      candidate => candidate.trackId === "track_01"
+    );
+    expect(track?.durationSeconds).toBeGreaterThan(0);
+
+    const economyPatchedPromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const economyPatchResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_module_state",
+          targetId: "economy-a",
+          payload: {
+            module: "economy",
+            patch: {
+              currencySeconds: track!.durationSeconds,
+              inflation: 1,
+              gameOver: false,
+              lastError: null,
+            },
+          },
+        }),
+      }
+    );
+    expect(economyPatchResponse.status).toBe(200);
+    await economyPatchedPromise;
+
+    const playStatePromise = waitForEvent<{
+      config: {
+        economy: {
+          currencySeconds: number;
+          currentTrackId: string | null;
+          gameOver: boolean;
+          lastError: string | null;
+        };
+        tracks: Array<{ trackId: string; playing: boolean }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    receiver.emit(WS_EVENTS.CONTROL_MESSAGE, {
+      command: "request_track_play",
+      targetId: "economy-a",
+      payload: {
+        trackId: "track_01",
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    const playState = await playStatePromise;
+    expect(playState.config.economy).toMatchObject({
+      currentTrackId: "track_01",
+      gameOver: false,
+      lastError: null,
+    });
+    expect(playState.config.economy.currencySeconds).toBeCloseTo(0, 3);
+    expect(playState.config.tracks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ trackId: "track_01", playing: true }),
+      ])
+    );
+  });
+
+  it("puts a receiver into game over when requested track cost exceeds currency", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "economy-b",
+      label: "Economy B",
+    });
+    await initialStatePromise;
+
+    const economyPatchedPromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const patchResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "economy-b",
+        payload: {
+          module: "economy",
+          patch: {
+            currencySeconds: 0,
+            inflation: 1,
+          },
+        },
+      }),
+    });
+    expect(patchResponse.status).toBe(200);
+    await economyPatchedPromise;
+
+    const gameOverStatePromise = waitForEvent<{
+      config: {
+        economy: { gameOver: boolean; lastError: string | null };
+        tracks: Array<{ trackId: string; playing: boolean }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    receiver.emit(WS_EVENTS.CONTROL_MESSAGE, {
+      command: "request_track_play",
+      targetId: "economy-b",
+      payload: {
+        trackId: "track_01",
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    const gameOverState = await gameOverStatePromise;
+    expect(gameOverState.config.economy).toMatchObject({
+      gameOver: true,
+      lastError: "insufficient_currency",
+    });
+    expect(gameOverState.config.tracks.some(track => track.playing)).toBe(
+      false
+    );
+  });
+
+  it("does not let a receiver bypass economy with set_track_state playing true", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "economy-c",
+      label: "Economy C",
+    });
+    await initialStatePromise;
+
+    receiver.emit(WS_EVENTS.CONTROL_MESSAGE, {
+      command: "set_track_state",
+      targetId: "economy-c",
+      payload: {
+        trackId: "track_01",
+        patch: {
+          playing: true,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitForNoEvent(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    const response = await fetch(`${baseUrl}/api/controller/receivers`);
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.receivers[0].config.tracks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ trackId: "track_01", playing: false }),
+      ])
+    );
+  });
+
   it("accepts receiver-scoped phase 2 track updates over websocket", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);

@@ -51,6 +51,7 @@ import { cn } from "@/lib/utils";
 import type {
   MapConfig,
   MapMovementConfig,
+  EconomyConfig,
   ReceiverState,
   ScoreConfig,
   TimingConfig,
@@ -60,6 +61,7 @@ import type {
 import { clampNormalizedCoordinate } from "@shared/wsTypes";
 import {
   AudioLines,
+  Coins,
   Download,
   Map as MapIcon,
   Monitor,
@@ -338,6 +340,10 @@ export default function Controller() {
     () => selectedReceiver?.config.timing ?? null,
     [selectedReceiver]
   );
+  const selectedEconomy = useMemo(
+    () => selectedReceiver?.config.economy ?? null,
+    [selectedReceiver]
+  );
   const selectedVote = useMemo(
     () => selectedReceiver?.config.vote ?? null,
     [selectedReceiver]
@@ -542,6 +548,42 @@ export default function Controller() {
     },
     [dispatchCommand, selectedReceiver]
   );
+
+  const patchEconomy = useCallback(
+    (patch: Partial<EconomyConfig>) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          module: "economy",
+          patch,
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const resetEconomy = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    dispatchCommand({
+      command: "economy_reset",
+      targetId: selectedReceiver.receiverId,
+      payload: {},
+    });
+    postDiscreteInteraction({
+      action: "resetEconomy",
+      element: "economy:reset",
+      value: true,
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [dispatchCommand, postDiscreteInteraction, selectedReceiver]);
 
   const handleTrackPlayState = useCallback(
     (track: TrackState, playing: boolean) => {
@@ -1317,6 +1359,152 @@ export default function Controller() {
                         </Field>
                       </FieldGroup>
                     </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Coins />
+                      Sound Economy
+                    </CardTitle>
+                    <CardDescription>
+                      Receiver-led playback uses seconds as currency. Reset
+                      revives a game-over receiver without changing the visible
+                      track list.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">Pool</p>
+                        <p className="mt-1 text-2xl font-semibold">
+                          {(selectedEconomy?.currencySeconds ?? 0).toFixed(1)}s
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">
+                          Inflation
+                        </p>
+                        <p className="mt-1 text-2xl font-semibold">
+                          x{(selectedEconomy?.inflation ?? 1).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">Current</p>
+                        <p className="mt-1 truncate text-sm font-medium">
+                          {selectedEconomy?.currentTrackId ?? "Idle"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">State</p>
+                        <p className="mt-1 text-sm font-medium">
+                          {selectedEconomy?.gameOver
+                            ? "Game Over"
+                            : selectedEconomy?.enabled
+                              ? "Enabled"
+                              : "Disabled"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <FieldGroup>
+                      <Field orientation="responsive">
+                        <FieldContent>
+                          <FieldLabel>Economy Enabled</FieldLabel>
+                          <FieldDescription>
+                            Receiver play buttons request server-side cost
+                            checks when enabled.
+                          </FieldDescription>
+                        </FieldContent>
+                        <Switch
+                          checked={selectedEconomy?.enabled ?? true}
+                          onCheckedChange={checked =>
+                            patchEconomy({ enabled: checked })
+                          }
+                        />
+                      </Field>
+
+                      <Field orientation="responsive">
+                        <FieldLabel>Starting Seconds</FieldLabel>
+                        <FieldContent>
+                          <NumericInput
+                            min={0}
+                            value={selectedEconomy?.startingSeconds ?? 30}
+                            onValueChange={value =>
+                              patchEconomy({ startingSeconds: value })
+                            }
+                          />
+                        </FieldContent>
+                      </Field>
+
+                      <Field orientation="responsive">
+                        <FieldLabel>Earn Rate / Second</FieldLabel>
+                        <FieldContent>
+                          <NumericInput
+                            min={0}
+                            step={0.1}
+                            value={selectedEconomy?.earnRatePerSecond ?? 1}
+                            onValueChange={value =>
+                              patchEconomy({ earnRatePerSecond: value })
+                            }
+                          />
+                        </FieldContent>
+                      </Field>
+
+                      <Field orientation="responsive">
+                        <FieldLabel>Inflation Growth / Second</FieldLabel>
+                        <FieldContent>
+                          <NumericInput
+                            min={0}
+                            step={0.01}
+                            value={
+                              selectedEconomy?.inflationGrowthPerSecond ?? 0.02
+                            }
+                            onValueChange={value =>
+                              patchEconomy({
+                                inflationGrowthPerSecond: value,
+                              })
+                            }
+                          />
+                        </FieldContent>
+                      </Field>
+
+                      <Field orientation="responsive">
+                        <FieldContent>
+                          <FieldLabel>Inflation Grows While Playing</FieldLabel>
+                          <FieldDescription>
+                            Matches the professor SoundEconomy default.
+                          </FieldDescription>
+                        </FieldContent>
+                        <Switch
+                          checked={
+                            selectedEconomy?.inflationGrowsWhilePlaying ?? true
+                          }
+                          onCheckedChange={checked =>
+                            patchEconomy({
+                              inflationGrowsWhilePlaying: checked,
+                            })
+                          }
+                        />
+                      </Field>
+                    </FieldGroup>
+
+                    {selectedEconomy?.lastError ? (
+                      <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                        Last rejection:{" "}
+                        {selectedEconomy.lastError.replace(/_/g, " ")}
+                      </p>
+                    ) : null}
+
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={resetEconomy}
+                    >
+                      <RotateCcw data-icon="inline-start" />
+                      Reset / Revive Economy
+                    </Button>
                   </CardContent>
                 </Card>
 
@@ -2565,6 +2753,8 @@ export default function Controller() {
                                 </FieldLabel>
                                 <FieldDescription>
                                   {track.trackId} ·{" "}
+                                  {track.durationSeconds.toFixed(1)}s ·{" "}
+                                  {track.categoryId} ·{" "}
                                   {track.url || "No audio URL"}
                                 </FieldDescription>
                               </FieldContent>

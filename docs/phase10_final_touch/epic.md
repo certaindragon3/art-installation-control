@@ -30,6 +30,8 @@
 
 D9 production verification completed on 2026-04-20 with `agent-browser` against `https://artinstallation.certaindragon3.work`. Evidence is stored in `evidence/phase10-loop-movement-agent-browser.md`.
 
+Phase 10 local implementation validation completed on 2026-04-20. Evidence is stored in `evidence/phase10-local-validation.md`.
+
 ## 背景
 
 教授这次反馈把系统重心从“controller 远程播放 receiver 音频”转向“receiver 学生自己决定何时播放可见音轨”。Controller 的职责更接近：
@@ -310,28 +312,28 @@ Phase 10 不重新设计 movement。需要复核：
 
 ## 验收标准
 
-- [ ] Phase 10 source files 已归档到 `docs/phase10_final_touch/source/`。
-- [ ] `ColorHitGame.cs` 已拆到 `docs/phase11_color_challenge/source/`。
-- [ ] Track payload 中所有 visible tracks 都有有效 `trackId`、`label`、`url`、`durationSeconds`、`categoryId`、`categoryColor`。
-- [ ] Track duration 可由 server 读取，用于 cost 计算。
-- [ ] Receiver 上显示的 track 一定可播放，除非 vote lock、game over 或明确 disabled。
-- [ ] Receiver 点击 play 使用 `request_track_play`，由 server 做 economy 校验和扣费。
-- [ ] Receiver 不能通过 `set_track_state playing:true` 绕过 economy。
-- [ ] Currency 只在 idle / silence 时增长。
-- [ ] Inflation 随时间增长，且默认播放时也增长。
-- [ ] Cost 显示为 seconds，且与 server 扣费一致。
-- [ ] Currency 不足时 receiver game over，音频停止，track 操作禁用。
-- [ ] Controller 能 reset / revive receiver economy。
-- [ ] Receiver UI 是 mobile-first 紧凑 track list。
-- [ ] Vote UI 仍可覆盖并锁定其他 receiver 操作。
-- [ ] Poll / vote 在移动和桌面视口内不溢出。
-- [ ] Home page 不暴露 controller 入口。
-- [ ] `/controller` 直接访问仍可用。
-- [ ] Controller 手动 play / pause 保持可用。
-- [ ] Phase 9 duplicate receiver ID 行为重新验证。
-- [ ] Phase 9 `loop: true` movement 重新验证为持续循环移动。
-- [ ] 自动生成 / 文档推荐的 Unity cue JSON 单段不超过 10 秒。
-- [ ] 本地 `corepack pnpm check`、`corepack pnpm test`、`corepack pnpm build` 通过。
+- [x] Phase 10 source files 已归档到 `docs/phase10_final_touch/source/`。
+- [x] `ColorHitGame.cs` 已拆到 `docs/phase11_color_challenge/source/`。
+- [x] Track payload 中所有 visible tracks 都有有效 `trackId`、`label`、`url`、`durationSeconds`、`categoryId`、`categoryColor`。
+- [x] Track duration 可由 server 读取，用于 cost 计算。
+- [x] Receiver 上显示的 track 一定可播放，除非 vote lock、game over 或明确 disabled。
+- [x] Receiver 点击 play 使用 `request_track_play`，由 server 做 economy 校验和扣费。
+- [x] Receiver 不能通过 `set_track_state playing:true` 绕过 economy。
+- [x] Currency 只在 idle / silence 时增长。
+- [x] Inflation 随时间增长，且默认播放时也增长。
+- [x] Cost 显示为 seconds，且与 server 扣费一致。
+- [x] Currency 不足时 receiver game over，音频停止，track 操作禁用。
+- [x] Controller 能 reset / revive receiver economy。
+- [x] Receiver UI 是 mobile-first 紧凑 track list。
+- [x] Vote UI 仍可覆盖并锁定其他 receiver 操作。
+- [x] Poll / vote 在移动和桌面视口内不溢出。
+- [x] Home page 不暴露 controller 入口。
+- [x] `/controller` 直接访问仍可用。
+- [x] Controller 手动 play / pause 保持可用。
+- [x] Phase 9 duplicate receiver ID 行为重新验证。
+- [x] Phase 9 `loop: true` movement 重新验证为持续循环移动。
+- [x] 自动生成 / 文档推荐的 Unity cue JSON 单段不超过 10 秒。
+- [x] 本地 `corepack pnpm check`、`corepack pnpm test`、`corepack pnpm build` 通过。
 - [ ] 若实现涉及 Socket.IO、生产路由或 Home/Controller 路由行为，完成单副本 Zeabur 多端验证。
 
 ## 测试建议
@@ -340,7 +342,7 @@ Phase 10 不重新设计 movement。需要复核：
   - idle 10 秒后 currency 增长约 10。
   - playing 10 秒时 currency 不增长。
   - inflation 在 idle 和 playing 时都增长。
-  - cost = duration * inflation。
+  - cost = duration \* inflation。
   - cost 恰好等于 currency 时允许播放。
   - cost 超过 currency 时 game over。
   - game over 后不能播放任何 track。

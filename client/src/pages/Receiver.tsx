@@ -31,8 +31,10 @@ import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
 import {
   clampNormalizedCoordinate,
   calculateTrackCost,
+  calculateColorChallengeGreenness,
   createDefaultReceiverConfig,
   evaluateTimingPress,
+  type ColorChallengeConfig,
   type EconomyConfig,
   type MapConfig,
   type PulseEvent,
@@ -49,6 +51,7 @@ import {
   Map as MapIcon,
   MessageSquare,
   Music,
+  Palette,
   Play,
   Repeat,
   SlidersHorizontal,
@@ -91,6 +94,31 @@ function syncTrackAudio(audio: HTMLAudioElement, track: TrackState) {
 type ReceiverTimingResult = TimingInteractionValue & {
   isoTimestamp: string;
 };
+
+function resolveColorChallengeProgress(
+  challenge: ColorChallengeConfig,
+  nowMs: number
+) {
+  if (!challenge.iterationStartedAt || challenge.iterationDurationMs <= 0) {
+    return {
+      t: 0,
+      greenness: 0,
+      remainingMs: challenge.iterationDurationMs,
+    };
+  }
+
+  const startedAtMs = new Date(challenge.iterationStartedAt).getTime();
+  const elapsedMs = Number.isFinite(startedAtMs)
+    ? Math.max(0, nowMs - startedAtMs)
+    : 0;
+  const t = Math.min(1, elapsedMs / Math.max(1, challenge.iterationDurationMs));
+
+  return {
+    t,
+    greenness: calculateColorChallengeGreenness(t),
+    remainingMs: Math.max(0, challenge.iterationDurationMs - elapsedMs),
+  };
+}
 
 function resolveEconomyDisplay(economy: EconomyConfig, nowMs: number) {
   const lastUpdatedAt = new Date(economy.lastUpdatedAt).getTime();
@@ -217,6 +245,11 @@ export default function Receiver() {
   const economy = useMemo(
     () => resolveEconomyDisplay(config.economy, nowMs),
     [config.economy, nowMs]
+  );
+  const colorChallenge = config.colorChallenge;
+  const colorChallengeProgress = useMemo(
+    () => resolveColorChallengeProgress(colorChallenge, nowMs),
+    [colorChallenge, nowMs]
   );
   const iconColor = config.visuals.iconColor;
   const pulseEnabled = config.pulse.enabled && config.pulse.active;
@@ -350,7 +383,12 @@ export default function Receiver() {
   }, [config.textDisplay.text]);
 
   useEffect(() => {
-    if (!pulseEnabled && !mapMovementActive && !config.economy.visible) {
+    if (
+      !pulseEnabled &&
+      !mapMovementActive &&
+      !config.economy.visible &&
+      !config.colorChallenge.visible
+    ) {
       return;
     }
 
@@ -365,7 +403,12 @@ export default function Receiver() {
 
     frameId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frameId);
-  }, [config.economy.visible, mapMovementActive, pulseEnabled]);
+  }, [
+    config.colorChallenge.visible,
+    config.economy.visible,
+    mapMovementActive,
+    pulseEnabled,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -573,6 +616,50 @@ export default function Receiver() {
     pulseEvent,
   ]);
 
+  const handleColorChallengeChoice = useCallback(
+    (choiceIndex: number) => {
+      const choice = colorChallenge.choices[choiceIndex];
+      if (
+        !choice ||
+        !colorChallenge.visible ||
+        !colorChallenge.enabled ||
+        colorChallenge.gameOver
+      ) {
+        return;
+      }
+
+      const pressedAt = new Date().toISOString();
+      sendCommand({
+        command: "submit_color_challenge_choice",
+        targetId: receiverId,
+        payload: {
+          choiceIndex,
+          colorId: choice.colorId,
+          pressedAt,
+        },
+        timestamp: pressedAt,
+      });
+      postDiscreteInteraction({
+        action: "submitColorChallengeChoice",
+        element: "receiver:color_challenge_choice",
+        value: {
+          choiceIndex,
+          colorId: choice.colorId,
+          t: colorChallengeProgress.t,
+          greenness: colorChallengeProgress.greenness,
+        },
+      });
+    },
+    [
+      colorChallenge,
+      colorChallengeProgress.greenness,
+      colorChallengeProgress.t,
+      postDiscreteInteraction,
+      receiverId,
+      sendCommand,
+    ]
+  );
+
   return (
     <div className="dark min-h-screen bg-zinc-950 text-zinc-50">
       <header className="border-b border-white/10 bg-zinc-950/90 backdrop-blur">
@@ -746,6 +833,151 @@ export default function Receiver() {
             )}
             aria-hidden={voteInteractionLocked}
           >
+            {colorChallenge.visible ? (
+              <Card className="border-primary/20 bg-card/95 shadow-[0_20px_70px_hsl(var(--primary)/0.08)]">
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant={
+                        colorChallenge.enabled && !colorChallenge.gameOver
+                          ? "default"
+                          : "outline"
+                      }
+                    >
+                      {colorChallenge.gameOver
+                        ? "Game Over"
+                        : colorChallenge.enabled
+                          ? "Active"
+                          : "Locked"}
+                    </Badge>
+                    <Badge variant="secondary">
+                      Score {colorChallenge.score.toFixed(1)}
+                    </Badge>
+                    <Badge variant="outline">
+                      {colorChallenge.iterationDurationMs / 1000}s round
+                    </Badge>
+                  </div>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Palette />
+                    Color Challenge
+                  </CardTitle>
+                  <CardDescription>
+                    Match your assigned color. The center of the bar gives the
+                    largest reward, and wrong choices near the center hurt more.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                    <div className="rounded-lg border border-border/60 bg-muted/25 px-4 py-3">
+                      <p className="text-xs uppercase text-muted-foreground">
+                        Your Color
+                      </p>
+                      {(() => {
+                        const assigned = colorChallenge.palette.find(
+                          color =>
+                            color.colorId === colorChallenge.assignedColorId
+                        );
+                        return (
+                          <div className="mt-2 flex min-w-0 items-center gap-3">
+                            <span
+                              className="size-8 shrink-0 rounded-lg border border-white/20"
+                              style={{
+                                backgroundColor:
+                                  assigned?.color ?? "transparent",
+                              }}
+                            />
+                            <p className="truncate text-2xl font-semibold">
+                              {assigned?.label ?? "Waiting"}
+                            </p>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-muted/25 px-4 py-3 text-center">
+                      <p className="text-xs uppercase text-muted-foreground">
+                        Score
+                      </p>
+                      <p className="mt-2 text-3xl font-semibold">
+                        {colorChallenge.score.toFixed(1)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+                    <div className="relative h-8 overflow-hidden rounded-full bg-muted">
+                      <div className="absolute inset-0 bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_22%,#22c55e_50%,#f59e0b_78%,#ef4444_100%)]" />
+                      <div
+                        className="absolute inset-y-0 right-0 bg-background/85 transition-[width] duration-75"
+                        style={{
+                          width: `${Math.max(
+                            0,
+                            (1 - colorChallengeProgress.t) * 100
+                          )}%`,
+                        }}
+                      />
+                      <div className="absolute inset-y-[-6px] left-1/2 w-1 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.7),0_0_16px_rgba(255,255,255,0.45)]" />
+                      <div
+                        className="absolute inset-y-[-2px] w-4 -translate-x-1/2 rounded-full border border-background/70 bg-background shadow-[0_0_18px_rgba(255,255,255,0.35)] transition-[left] duration-75"
+                        style={{
+                          left: `${colorChallengeProgress.t * 100}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-3 flex flex-wrap justify-between gap-3 text-xs text-muted-foreground">
+                      <span>
+                        Greenness {colorChallengeProgress.greenness.toFixed(2)}
+                      </span>
+                      <span>
+                        Remaining{" "}
+                        {(colorChallengeProgress.remainingMs / 1000).toFixed(1)}
+                        s
+                      </span>
+                    </div>
+                  </div>
+
+                  {colorChallenge.gameOver ? (
+                    <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                      GAME OVER
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {colorChallenge.choices.map((choice, index) => (
+                        <Button
+                          key={`${choice.colorId}-${index}`}
+                          type="button"
+                          size="lg"
+                          className="h-auto min-h-20 justify-start rounded-lg px-4 py-4 text-left text-base whitespace-normal"
+                          style={{
+                            backgroundColor: choice.color,
+                            color: "#0a0a0a",
+                          }}
+                          disabled={
+                            !colorChallenge.enabled ||
+                            colorChallenge.choices.length !== 2
+                          }
+                          onClick={() => handleColorChallengeChoice(index)}
+                        >
+                          {choice.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+
+                  {colorChallenge.lastResult ? (
+                    <div className="rounded-lg border border-border/60 bg-background/80 px-4 py-3 text-sm">
+                      <p className="font-medium">
+                        Last result: {colorChallenge.lastResult.reason}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Delta {colorChallenge.lastResult.scoreDelta.toFixed(2)}{" "}
+                        · score {colorChallenge.lastResult.score.toFixed(1)}
+                      </p>
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            ) : null}
+
             {timingVisible ? (
               <Card className="border-primary/20 bg-card/95 shadow-[0_20px_70px_hsl(var(--primary)/0.08)]">
                 <CardHeader className="pb-3">

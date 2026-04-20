@@ -51,6 +51,7 @@ import { cn } from "@/lib/utils";
 import type {
   MapConfig,
   MapMovementConfig,
+  ColorChallengeConfig,
   EconomyConfig,
   ReceiverState,
   ScoreConfig,
@@ -282,6 +283,10 @@ export default function Controller() {
   const [voteAllowRevote, setVoteAllowRevote] = useState(false);
   const [exportingVotes, setExportingVotes] = useState(false);
   const [exportingTiming, setExportingTiming] = useState(false);
+  const [exportingColorChallenge, setExportingColorChallenge] = useState(false);
+  const [colorChallengePaletteInput, setColorChallengePaletteInput] = useState(
+    "red,Red,#ef4444\ngreen,Green,#22c55e\nblue,Blue,#3b82f6\nyellow,Yellow,#eab308"
+  );
 
   useEffect(() => {
     if (selectedReceiverId) {
@@ -344,10 +349,26 @@ export default function Controller() {
     () => selectedReceiver?.config.economy ?? null,
     [selectedReceiver]
   );
+  const selectedColorChallenge = useMemo(
+    () => selectedReceiver?.config.colorChallenge ?? null,
+    [selectedReceiver]
+  );
   const selectedVote = useMemo(
     () => selectedReceiver?.config.vote ?? null,
     [selectedReceiver]
   );
+
+  useEffect(() => {
+    if (!selectedColorChallenge) {
+      return;
+    }
+
+    setColorChallengePaletteInput(
+      selectedColorChallenge.palette
+        .map(color => `${color.colorId},${color.label},${color.color}`)
+        .join("\n")
+    );
+  }, [selectedReceiverId]);
   const offlineReceivers = useMemo(
     () => receivers.filter(receiver => !receiver.connected),
     [receivers]
@@ -566,6 +587,42 @@ export default function Controller() {
     },
     [dispatchCommand, selectedReceiver]
   );
+
+  const patchColorChallenge = useCallback(
+    (patch: Partial<ColorChallengeConfig>) => {
+      if (!selectedReceiver) {
+        return;
+      }
+
+      dispatchCommand({
+        command: "set_module_state",
+        targetId: selectedReceiver.receiverId,
+        payload: {
+          module: "colorChallenge",
+          patch,
+        },
+      });
+    },
+    [dispatchCommand, selectedReceiver]
+  );
+
+  const resetColorChallenge = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    dispatchCommand({
+      command: "color_challenge_reset",
+      targetId: selectedReceiver.receiverId,
+      payload: {},
+    });
+    postDiscreteInteraction({
+      action: "resetColorChallenge",
+      element: "colorChallenge:reset",
+      value: true,
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [dispatchCommand, postDiscreteInteraction, selectedReceiver]);
 
   const resetEconomy = useCallback(() => {
     if (!selectedReceiver) {
@@ -1024,6 +1081,75 @@ export default function Controller() {
     }
   }, [postDiscreteInteraction]);
 
+  const handleColorChallengePaletteApply = useCallback(() => {
+    if (!selectedReceiver) {
+      return;
+    }
+
+    const palette = colorChallengePaletteInput
+      .split("\n")
+      .map((line, index) => {
+        const [rawId, rawLabel, rawColor] = line
+          .split(",")
+          .map(part => part.trim());
+        const colorId = rawId || `color_${index + 1}`;
+        const label = rawLabel || colorId;
+        const color = rawColor || "#ffffff";
+        return { colorId, label, color };
+      })
+      .filter(color => color.colorId && color.label);
+
+    if (palette.length < 2) {
+      return;
+    }
+
+    patchColorChallenge({
+      palette,
+    });
+    postDiscreteInteraction({
+      action: "setColorChallengePalette",
+      element: "colorChallenge:palette",
+      value: palette,
+      receiverId: selectedReceiver.receiverId,
+    });
+  }, [
+    colorChallengePaletteInput,
+    patchColorChallenge,
+    postDiscreteInteraction,
+    selectedReceiver,
+  ]);
+
+  const handleColorChallengeExport = useCallback(async () => {
+    setExportingColorChallenge(true);
+
+    try {
+      const response = await fetch("/api/controller/color-challenge/export");
+      if (!response.ok) {
+        throw new Error(`Failed to export color challenge: ${response.status}`);
+      }
+
+      const body = await response.json();
+      const blob = new Blob([JSON.stringify(body, null, 2)], {
+        type: "application/json",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `phase11-color-challenge-${new Date().toISOString()}.json`;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+
+      postDiscreteInteraction({
+        action: "exportColorChallenge",
+        element: "colorChallenge:export_json",
+        value: body.colorChallenge?.totalEvents ?? 0,
+        receiverId: null,
+      });
+    } finally {
+      setExportingColorChallenge(false);
+    }
+  }, [postDiscreteInteraction]);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border/60 bg-card/90 backdrop-blur">
@@ -1034,10 +1160,10 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 10 Controller
+                Phase 11 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Receiver-led economy, visible tracks, voting, map, and live
+                Color challenge, receiver-led economy, voting, map, and live
                 receiver control
               </p>
             </div>
@@ -1359,6 +1485,328 @@ export default function Controller() {
                         </Field>
                       </FieldGroup>
                     </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Palette />
+                      Color Challenge
+                    </CardTitle>
+                    <CardDescription>
+                      Server-generated two-choice rounds based on the professor
+                      ColorHitGame scoring model.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">Score</p>
+                        <p className="mt-1 text-2xl font-semibold">
+                          {(selectedColorChallenge?.score ?? 0).toFixed(1)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">
+                          Assigned
+                        </p>
+                        <p className="mt-1 truncate text-sm font-medium">
+                          {selectedColorChallenge?.assignedColorId ?? "Waiting"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">Round</p>
+                        <p className="mt-1 text-sm font-medium">
+                          {selectedColorChallenge?.choices.length === 2
+                            ? "Ready"
+                            : "Not started"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                        <p className="text-xs text-muted-foreground">State</p>
+                        <p className="mt-1 text-sm font-medium">
+                          {selectedColorChallenge?.gameOver
+                            ? "Game Over"
+                            : selectedColorChallenge?.enabled
+                              ? "Enabled"
+                              : "Disabled"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">
+                            Challenge Visible
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Shows the color game on the receiver.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={selectedColorChallenge?.visible ?? false}
+                          onCheckedChange={checked => {
+                            patchColorChallenge({
+                              visible: checked,
+                            });
+                            postDiscreteInteraction({
+                              action: "toggleColorChallengeVisible",
+                              element: "colorChallenge:visible",
+                              value: checked,
+                              receiverId: selectedReceiver.receiverId,
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">
+                            Challenge Enabled
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Enabled starts server-authoritative rounds.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={selectedColorChallenge?.enabled ?? false}
+                          onCheckedChange={checked => {
+                            patchColorChallenge({
+                              enabled: checked,
+                            });
+                            postDiscreteInteraction({
+                              action: "toggleColorChallengeEnabled",
+                              element: "colorChallenge:enabled",
+                              value: checked,
+                              receiverId: selectedReceiver.receiverId,
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <Field>
+                          <FieldLabel htmlFor="color-starting-score">
+                            Starting Score
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-starting-score"
+                            min={0}
+                            step={0.1}
+                            value={selectedColorChallenge?.startingScore ?? 1}
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                startingScore: value,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="color-min-interval">
+                            Min Seconds
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-min-interval"
+                            min={0.25}
+                            step={0.1}
+                            value={
+                              (selectedColorChallenge?.minIntervalMs ?? 2000) /
+                              1000
+                            }
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                minIntervalMs: value * 1000,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="color-max-interval">
+                            Max Seconds
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-max-interval"
+                            min={0.25}
+                            step={0.1}
+                            value={
+                              (selectedColorChallenge?.maxIntervalMs ?? 3000) /
+                              1000
+                            }
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                maxIntervalMs: value * 1000,
+                              })
+                            }
+                          />
+                        </Field>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-4">
+                        <Field>
+                          <FieldLabel htmlFor="color-max-reward">
+                            Max Reward
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-max-reward"
+                            min={0}
+                            step={0.1}
+                            value={selectedColorChallenge?.maxReward ?? 3}
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                maxReward: value,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="color-min-wrong">
+                            Min Wrong Penalty
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-min-wrong"
+                            min={0}
+                            step={0.1}
+                            value={
+                              selectedColorChallenge?.minWrongPenalty ?? 0.5
+                            }
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                minWrongPenalty: value,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="color-max-wrong">
+                            Max Wrong Penalty
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-max-wrong"
+                            min={0}
+                            step={0.1}
+                            value={
+                              selectedColorChallenge?.maxWrongPenalty ?? 1.5
+                            }
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                maxWrongPenalty: value,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="color-miss-penalty">
+                            Miss Penalty
+                          </FieldLabel>
+                          <NumericInput
+                            id="color-miss-penalty"
+                            min={0}
+                            step={0.1}
+                            value={selectedColorChallenge?.missPenalty ?? 1}
+                            onValueChange={value =>
+                              patchColorChallenge({
+                                missPenalty: value,
+                              })
+                            }
+                          />
+                        </Field>
+                      </div>
+
+                      <Field orientation="responsive">
+                        <FieldContent>
+                          <FieldLabel>
+                            Refresh Assigned Color Each Round
+                          </FieldLabel>
+                          <FieldDescription>
+                            Matches the Unity reference default.
+                          </FieldDescription>
+                        </FieldContent>
+                        <Switch
+                          checked={
+                            selectedColorChallenge?.refreshAssignedColorEachIteration ??
+                            true
+                          }
+                          onCheckedChange={checked =>
+                            patchColorChallenge({
+                              refreshAssignedColorEachIteration: checked,
+                            })
+                          }
+                        />
+                      </Field>
+                    </FieldGroup>
+
+                    <FieldGroup className="rounded-xl border border-dashed border-border/70 p-4">
+                      <Field>
+                        <FieldLabel htmlFor="color-palette">Palette</FieldLabel>
+                        <Textarea
+                          id="color-palette"
+                          value={colorChallengePaletteInput}
+                          onChange={event =>
+                            setColorChallengePaletteInput(event.target.value)
+                          }
+                          className="min-h-28"
+                        />
+                        <FieldDescription>
+                          One color per line: `colorId,label,#hex`. Keep at
+                          least two unique color ids.
+                        </FieldDescription>
+                      </Field>
+
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          onClick={handleColorChallengePaletteApply}
+                        >
+                          <Send data-icon="inline-start" />
+                          Apply Palette
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={resetColorChallenge}
+                        >
+                          <RotateCcw data-icon="inline-start" />
+                          Reset / Revive
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleColorChallengeExport}
+                          disabled={exportingColorChallenge}
+                        >
+                          <Download data-icon="inline-start" />
+                          {exportingColorChallenge
+                            ? "Exporting..."
+                            : "Export JSON"}
+                        </Button>
+                      </div>
+                    </FieldGroup>
+
+                    {selectedColorChallenge?.lastResult ? (
+                      <div className="rounded-xl border border-border/60 bg-muted/25 p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary">
+                            {selectedColorChallenge.lastResult.reason}
+                          </Badge>
+                          <Badge variant="outline">
+                            Delta{" "}
+                            {selectedColorChallenge.lastResult.scoreDelta.toFixed(
+                              2
+                            )}
+                          </Badge>
+                          <Badge variant="outline">
+                            Greenness{" "}
+                            {selectedColorChallenge.lastResult.greenness.toFixed(
+                              2
+                            )}
+                          </Badge>
+                        </div>
+                      </div>
+                    ) : null}
                   </CardContent>
                 </Card>
 
@@ -3374,6 +3822,10 @@ function ReceiverSummaryCard({
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>Score {receiver.config.score.value}</span>
+        <span>
+          Color {receiver.config.colorChallenge.score.toFixed(1)}
+          {receiver.config.colorChallenge.gameOver ? " over" : ""}
+        </span>
         <span>
           Map{" "}
           {clampNormalizedCoordinate(receiver.config.map.playerPosX).toFixed(2)}

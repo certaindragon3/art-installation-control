@@ -2479,6 +2479,254 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("supports phase 11 color challenge rounds, scoring, timeout, reset, and export", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "color-a",
+      label: "Color A",
+    });
+    await initialStatePromise;
+
+    const enabledStatePromise = waitForEvent<{
+      config: {
+        colorChallenge: {
+          visible: boolean;
+          enabled: boolean;
+          score: number;
+          assignedColorId: string;
+          choices: Array<{ colorId: string }>;
+          correctChoiceIndex: number;
+          iterationStartedAt: string;
+          iterationDurationMs: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const enableResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "color-a",
+        payload: {
+          module: "colorChallenge",
+          patch: {
+            visible: true,
+            enabled: true,
+            score: 1,
+            startingScore: 1,
+            minIntervalMs: 300,
+            maxIntervalMs: 300,
+            maxReward: 3,
+            minWrongPenalty: 0.5,
+            maxWrongPenalty: 1.5,
+            missPenalty: 2,
+          },
+        },
+      }),
+    });
+
+    expect(enableResponse.status).toBe(200);
+    const enabledState = await enabledStatePromise;
+    const firstRound = enabledState.config.colorChallenge;
+
+    expect(firstRound).toMatchObject({
+      visible: true,
+      enabled: true,
+      score: 1,
+      choices: expect.arrayContaining([
+        expect.objectContaining({ colorId: firstRound.assignedColorId }),
+      ]),
+      correctChoiceIndex: expect.any(Number),
+      iterationDurationMs: 300,
+    });
+    expect(firstRound.choices).toHaveLength(2);
+    expect(firstRound.correctChoiceIndex).toBeGreaterThanOrEqual(0);
+    expect(firstRound.correctChoiceIndex).toBeLessThan(2);
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    const correctStatePromise = waitForEvent<{
+      config: {
+        colorChallenge: {
+          score: number;
+          lastResult: { reason: string; greenness: number; scoreDelta: number };
+          choices: Array<{ colorId: string }>;
+          correctChoiceIndex: number;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const correctResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "submit_color_challenge_choice",
+        targetId: "color-a",
+        payload: {
+          choiceIndex: firstRound.correctChoiceIndex,
+          colorId: firstRound.choices[firstRound.correctChoiceIndex].colorId,
+          pressedAt: new Date().toISOString(),
+        },
+      }),
+    });
+
+    expect(correctResponse.status).toBe(200);
+    const correctState = await correctStatePromise;
+    expect(correctState.config.colorChallenge.lastResult).toMatchObject({
+      reason: "correct",
+    });
+    expect(
+      correctState.config.colorChallenge.lastResult.greenness
+    ).toBeGreaterThan(0.5);
+    expect(
+      correctState.config.colorChallenge.lastResult.scoreDelta
+    ).toBeGreaterThan(1.5);
+    expect(correctState.config.colorChallenge.score).toBeGreaterThan(1);
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    const secondRound = correctState.config.colorChallenge;
+    const wrongChoiceIndex = secondRound.correctChoiceIndex === 0 ? 1 : 0;
+    const wrongStatePromise = waitForEvent<{
+      config: {
+        colorChallenge: {
+          score: number;
+          lastResult: { reason: string; scoreDelta: number };
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const wrongResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "submit_color_challenge_choice",
+        targetId: "color-a",
+        payload: {
+          choiceIndex: wrongChoiceIndex,
+          colorId: secondRound.choices[wrongChoiceIndex].colorId,
+          pressedAt: new Date().toISOString(),
+        },
+      }),
+    });
+
+    expect(wrongResponse.status).toBe(200);
+    const wrongState = await wrongStatePromise;
+    expect(wrongState.config.colorChallenge.lastResult).toMatchObject({
+      reason: "wrong",
+    });
+    expect(wrongState.config.colorChallenge.lastResult.scoreDelta).toBeLessThan(
+      0
+    );
+
+    const resetStatePromise = waitForEvent<{
+      config: {
+        colorChallenge: {
+          score: number;
+          gameOver: boolean;
+          choices: Array<{ colorId: string }>;
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const resetResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "color_challenge_reset",
+        targetId: "color-a",
+        payload: {},
+      }),
+    });
+
+    expect(resetResponse.status).toBe(200);
+    await expect(resetStatePromise).resolves.toMatchObject({
+      config: {
+        colorChallenge: {
+          score: 1,
+          gameOver: false,
+          choices: expect.any(Array),
+        },
+      },
+    });
+
+    const timeoutPatchState = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const timeoutResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "color-a",
+        payload: {
+          module: "colorChallenge",
+          patch: {
+            score: 1,
+            startingScore: 1,
+            gameOver: false,
+            minIntervalMs: 300,
+            maxIntervalMs: 300,
+            missPenalty: 2,
+          },
+        },
+      }),
+    });
+
+    expect(timeoutResponse.status).toBe(200);
+    await timeoutPatchState;
+
+    const timeoutStatePromise = waitForEvent<{
+      config: {
+        colorChallenge: {
+          score: number;
+          gameOver: boolean;
+          lastResult: { reason: string; scoreDelta: number };
+        };
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+    const timeoutState = await timeoutStatePromise;
+    expect(timeoutState.config.colorChallenge).toMatchObject({
+      score: 0,
+      gameOver: true,
+      lastResult: {
+        reason: "miss",
+        scoreDelta: -2,
+      },
+    });
+
+    const exportResponse = await fetch(
+      `${baseUrl}/api/controller/color-challenge/export`
+    );
+    const exportBody = await exportResponse.json();
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportBody).toMatchObject({
+      ok: true,
+      colorChallenge: {
+        totalEvents: 3,
+        correct: 1,
+        wrong: 1,
+        misses: 1,
+        gameOvers: 1,
+      },
+    });
+  });
+
   it("clears offline receivers and returns useful HTTP errors", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);

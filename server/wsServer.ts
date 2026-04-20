@@ -8,10 +8,17 @@ import {
 } from "./pulseScheduler";
 import {
   calculateTrackCost,
+  clamp01,
   clampTimingTolerance,
   clampNormalizedCoordinate,
   CONFIG_TTL_MS,
+  calculateColorChallengeGreenness,
+  createDefaultColorChallengeConfig,
   type ControlInputMessage,
+  type ColorChallengeColor,
+  type ColorChallengeEventExport,
+  type ColorChallengeExport,
+  type ColorChallengeResult,
   createDefaultEconomyConfig,
   createDefaultReceiverConfig,
   type GroupState,
@@ -28,6 +35,7 @@ import {
   type SetModuleStatePayload,
   type SetTrackStatePayload,
   type SetVisibleTracksPayload,
+  type SubmitColorChallengeChoicePayload,
   type SubmitVotePayload,
   type TimingEventExport,
   type TimingExport,
@@ -74,6 +82,8 @@ const RECEIVER_CLEANUP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_MAP_MOVEMENT_DURATION_MS = 20_000;
 const MIN_MAP_MOVEMENT_DURATION_MS = 100;
 const MAX_MAP_MOVEMENT_DURATION_MS = 10 * 60 * 1000;
+const MIN_COLOR_CHALLENGE_INTERVAL_MS = 250;
+const MAX_COLOR_CHALLENGE_INTERVAL_MS = 10 * 60 * 1000;
 const MANUAL_TRACK_CATEGORY_ID = "manual";
 const MANUAL_TRACK_CATEGORY_COLOR = "#64748b";
 
@@ -82,9 +92,11 @@ const controllers = new Set<string>();
 const unities = new Set<string>();
 const pulseLoops = new Map<string, PulseScheduler>();
 const economyPlayTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+const colorChallengeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const voteSessions = new Map<string, VoteSession>();
 const receiverActiveVotes = new Map<string, string>();
 const timingEvents: TimingEventExport[] = [];
+const colorChallengeEvents: ColorChallengeEventExport[] = [];
 
 let io: Server | null = null;
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -190,6 +202,429 @@ function scheduleEconomyPlayTimeout(
     scheduleEconomyPlayTimeout(receiverId, currentState);
   }, waitMs);
   economyPlayTimeouts.set(receiverId, timeout);
+}
+
+function clearColorChallengeTimeout(receiverId: string) {
+  const timeout = colorChallengeTimeouts.get(receiverId);
+  if (!timeout) {
+    return;
+  }
+
+  clearTimeout(timeout);
+  colorChallengeTimeouts.delete(receiverId);
+}
+
+function isColorChallengeRunning(state: InternalReceiverState) {
+  const challenge = state.config.colorChallenge;
+  return (
+    state.connected &&
+    challenge.visible &&
+    challenge.enabled &&
+    !challenge.gameOver &&
+    Boolean(challenge.iterationStartedAt) &&
+    challenge.iterationDurationMs > 0
+  );
+}
+
+function scheduleColorChallengeTimeout(
+  receiverId: string,
+  state: InternalReceiverState
+) {
+  clearColorChallengeTimeout(receiverId);
+
+  if (!isColorChallengeRunning(state)) {
+    return;
+  }
+
+  const challenge = state.config.colorChallenge;
+  const startedAtMs = parseIsoMs(challenge.iterationStartedAt, NaN);
+  if (!Number.isFinite(startedAtMs)) {
+    return;
+  }
+
+  const waitMs = Math.max(
+    0,
+    startedAtMs + challenge.iterationDurationMs - Date.now()
+  );
+  const timeout = setTimeout(() => {
+    const currentState = receivers.get(receiverId);
+    if (!currentState) {
+      clearColorChallengeTimeout(receiverId);
+      return;
+    }
+
+    if (resolveColorChallengeMiss(currentState)) {
+      incrementConfigVersion(currentState);
+      emitReceiverStateToRoom(receiverId, currentState);
+      broadcastReceiverList();
+    }
+
+    scheduleColorChallengeTimeout(receiverId, currentState);
+  }, waitMs);
+  colorChallengeTimeouts.set(receiverId, timeout);
+}
+
+function normalizeColorChallengeColor(
+  value: unknown,
+  fallbackIndex: number
+): ColorChallengeColor | null {
+  if (typeof value === "string") {
+    const label = value.trim();
+    if (!label) {
+      return null;
+    }
+
+    const colorId = label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    return {
+      colorId: colorId || `color_${fallbackIndex + 1}`,
+      label,
+      color: "#ffffff",
+    };
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const rawId =
+    typeof value.colorId === "string"
+      ? value.colorId
+      : typeof value.id === "string"
+        ? value.id
+        : "";
+  const rawLabel =
+    typeof value.label === "string"
+      ? value.label
+      : typeof value.name === "string"
+        ? value.name
+        : rawId;
+  const colorId = rawId.trim() || `color_${fallbackIndex + 1}`;
+  const label = rawLabel.trim() || colorId;
+  const color =
+    typeof value.color === "string" && value.color.trim()
+      ? value.color.trim()
+      : "#ffffff";
+
+  return { colorId, label, color };
+}
+
+function normalizeColorChallengePalette(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const seen = new Set<string>();
+  const palette: ColorChallengeColor[] = [];
+
+  value.forEach((item, index) => {
+    const color = normalizeColorChallengeColor(item, index);
+    if (!color || seen.has(color.colorId)) {
+      return;
+    }
+
+    seen.add(color.colorId);
+    palette.push(color);
+  });
+
+  return palette.length >= 2 ? palette : null;
+}
+
+function pickRandomItem<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)]!;
+}
+
+function clampColorChallengeInterval(value: unknown, fallback: number) {
+  if (!hasFiniteNumber(value)) {
+    return fallback;
+  }
+
+  return Math.min(
+    MAX_COLOR_CHALLENGE_INTERVAL_MS,
+    Math.max(MIN_COLOR_CHALLENGE_INTERVAL_MS, Math.round(value))
+  );
+}
+
+function normalizeColorChallengeIntervals(
+  minIntervalMs: number,
+  maxIntervalMs: number
+) {
+  const minMs = clampColorChallengeInterval(
+    minIntervalMs,
+    createDefaultColorChallengeConfig().minIntervalMs
+  );
+  const maxMs = clampColorChallengeInterval(maxIntervalMs, minMs);
+
+  return maxMs < minMs
+    ? { minIntervalMs: maxMs, maxIntervalMs: minMs }
+    : { minIntervalMs: minMs, maxIntervalMs: maxMs };
+}
+
+function randomColorChallengeDurationMs(
+  minIntervalMs: number,
+  maxIntervalMs: number
+) {
+  if (maxIntervalMs <= minIntervalMs) {
+    return minIntervalMs;
+  }
+
+  return Math.round(
+    minIntervalMs + Math.random() * (maxIntervalMs - minIntervalMs)
+  );
+}
+
+function hasValidColorChallengeRound(state: InternalReceiverState) {
+  const challenge = state.config.colorChallenge;
+  return (
+    challenge.choices.length === 2 &&
+    challenge.correctChoiceIndex !== null &&
+    challenge.correctChoiceIndex >= 0 &&
+    challenge.correctChoiceIndex < challenge.choices.length &&
+    Boolean(challenge.iterationStartedAt) &&
+    challenge.iterationDurationMs > 0 &&
+    challenge.assignedColorId !== null &&
+    challenge.choices.some(
+      choice => choice.colorId === challenge.assignedColorId
+    )
+  );
+}
+
+function startColorChallengeRound(
+  state: InternalReceiverState,
+  now = Date.now()
+) {
+  const challenge = state.config.colorChallenge;
+  if (challenge.palette.length < 2) {
+    challenge.palette = createDefaultColorChallengeConfig().palette;
+  }
+
+  const assigned =
+    !challenge.refreshAssignedColorEachIteration &&
+    challenge.assignedColorId !== null
+      ? challenge.palette.find(
+          color => color.colorId === challenge.assignedColorId
+        )
+      : null;
+  const assignedColor = assigned ?? pickRandomItem(challenge.palette);
+  const otherChoices = challenge.palette.filter(
+    color => color.colorId !== assignedColor.colorId
+  );
+  const otherColor = pickRandomItem(otherChoices);
+  const choices =
+    Math.random() < 0.5
+      ? [assignedColor, otherColor]
+      : [otherColor, assignedColor];
+  const correctChoiceIndex = choices.findIndex(
+    choice => choice.colorId === assignedColor.colorId
+  );
+
+  challenge.assignedColorId = assignedColor.colorId;
+  challenge.choices = choices.map(choice => ({ ...choice }));
+  challenge.correctChoiceIndex = correctChoiceIndex;
+  challenge.iterationStartedAt = new Date(now).toISOString();
+  challenge.iterationDurationMs = randomColorChallengeDurationMs(
+    challenge.minIntervalMs,
+    challenge.maxIntervalMs
+  );
+}
+
+function resetColorChallenge(state: InternalReceiverState) {
+  const current = state.config.colorChallenge;
+  state.config.colorChallenge = {
+    ...createDefaultColorChallengeConfig(),
+    visible: current.visible,
+    enabled: current.enabled,
+    startingScore: current.startingScore,
+    score: current.startingScore,
+    palette: current.palette.map(color => ({ ...color })),
+    minIntervalMs: current.minIntervalMs,
+    maxIntervalMs: current.maxIntervalMs,
+    maxReward: current.maxReward,
+    minWrongPenalty: current.minWrongPenalty,
+    maxWrongPenalty: current.maxWrongPenalty,
+    missPenalty: current.missPenalty,
+    refreshAssignedColorEachIteration:
+      current.refreshAssignedColorEachIteration,
+  };
+
+  const challenge = state.config.colorChallenge;
+  challenge.lastResult = {
+    reason: "reset",
+    choiceIndex: null,
+    colorId: null,
+    assignedColorId: challenge.assignedColorId,
+    correctChoiceIndex: null,
+    t: 0,
+    greenness: 0,
+    scoreDelta: 0,
+    score: challenge.score,
+    gameOver: false,
+    resolvedAt: new Date().toISOString(),
+  };
+
+  if (challenge.visible && challenge.enabled) {
+    startColorChallengeRound(state);
+  }
+
+  return true;
+}
+
+function recordColorChallengeResult(
+  state: InternalReceiverState,
+  result: ColorChallengeResult,
+  choices = state.config.colorChallenge.choices
+) {
+  const isoTimestamp = result.resolvedAt;
+  const timestamp = parseIsoMs(isoTimestamp, Date.now());
+  const event: ColorChallengeEventExport = {
+    ...result,
+    userId: state.receiverId,
+    receiverId: state.receiverId,
+    label: state.label,
+    timestamp,
+    isoTimestamp,
+    choices: choices.map(choice => ({ ...choice })),
+  };
+  colorChallengeEvents.push(event);
+
+  emitUnityEvent({
+    sourceRole: "receiver",
+    receiverId: state.receiverId,
+    action: "colorChallengeResult",
+    element: "receiver:color_challenge",
+    value: event,
+    timestamp: isoTimestamp,
+  });
+}
+
+function applyColorChallengeScoreDelta(
+  state: InternalReceiverState,
+  result: Omit<ColorChallengeResult, "score" | "gameOver">
+) {
+  const challenge = state.config.colorChallenge;
+  challenge.score = Math.max(0, challenge.score + result.scoreDelta);
+  if (challenge.score <= 0) {
+    challenge.gameOver = true;
+    challenge.score = 0;
+  }
+
+  const nextResult: ColorChallengeResult = {
+    ...result,
+    score: challenge.score,
+    gameOver: challenge.gameOver,
+  };
+  challenge.lastResult = nextResult;
+  recordColorChallengeResult(state, nextResult);
+
+  if (!challenge.gameOver) {
+    startColorChallengeRound(state, parseIsoMs(result.resolvedAt, Date.now()));
+  }
+}
+
+function resolveColorChallengeMiss(
+  state: InternalReceiverState,
+  now = Date.now()
+) {
+  const challenge = state.config.colorChallenge;
+  if (!isColorChallengeRunning(state) || !hasValidColorChallengeRound(state)) {
+    return false;
+  }
+
+  const startedAtMs = parseIsoMs(challenge.iterationStartedAt, NaN);
+  if (!Number.isFinite(startedAtMs)) {
+    return false;
+  }
+
+  const elapsedMs = now - startedAtMs;
+  if (elapsedMs < challenge.iterationDurationMs) {
+    return false;
+  }
+
+  applyColorChallengeScoreDelta(state, {
+    reason: "miss",
+    choiceIndex: null,
+    colorId: null,
+    assignedColorId: challenge.assignedColorId,
+    correctChoiceIndex: challenge.correctChoiceIndex,
+    t: 1,
+    greenness: 0,
+    scoreDelta: -challenge.missPenalty,
+    resolvedAt: new Date(now).toISOString(),
+  });
+
+  return true;
+}
+
+function submitColorChallengeChoice(
+  state: InternalReceiverState,
+  payload: SubmitColorChallengeChoicePayload
+) {
+  const challenge = state.config.colorChallenge;
+  if (!isColorChallengeRunning(state) || !hasValidColorChallengeRound(state)) {
+    return false;
+  }
+
+  const choiceIndex = Math.trunc(payload.choiceIndex);
+  if (
+    !Number.isInteger(choiceIndex) ||
+    choiceIndex < 0 ||
+    choiceIndex >= challenge.choices.length
+  ) {
+    return false;
+  }
+
+  const now = Date.now();
+  const pressedAtMs =
+    typeof payload.pressedAt === "string" && payload.pressedAt.trim()
+      ? parseIsoMs(payload.pressedAt, now)
+      : hasFiniteNumber(payload.clientTimestamp)
+        ? payload.clientTimestamp
+        : now;
+  const resolvedPressedAtMs = Math.min(now, pressedAtMs);
+  const startedAtMs = parseIsoMs(challenge.iterationStartedAt, now);
+  const t = clamp01(
+    (resolvedPressedAtMs - startedAtMs) /
+      Math.max(1, challenge.iterationDurationMs),
+    0
+  );
+
+  if (t >= 1) {
+    return resolveColorChallengeMiss(state, resolvedPressedAtMs);
+  }
+
+  const chosenColor = challenge.choices[choiceIndex]!;
+  if (
+    typeof payload.colorId === "string" &&
+    payload.colorId.trim() &&
+    payload.colorId.trim() !== chosenColor.colorId
+  ) {
+    return false;
+  }
+
+  const correct = choiceIndex === challenge.correctChoiceIndex;
+  const greenness = calculateColorChallengeGreenness(t);
+  const scoreDelta = correct
+    ? challenge.maxReward * greenness
+    : -(
+        challenge.minWrongPenalty +
+        (challenge.maxWrongPenalty - challenge.minWrongPenalty) * greenness
+      );
+
+  applyColorChallengeScoreDelta(state, {
+    reason: correct ? "correct" : "wrong",
+    choiceIndex,
+    colorId: chosenColor.colorId,
+    assignedColorId: challenge.assignedColorId,
+    correctChoiceIndex: challenge.correctChoiceIndex,
+    t,
+    greenness,
+    scoreDelta,
+    resolvedAt: new Date(resolvedPressedAtMs).toISOString(),
+  });
+
+  return true;
 }
 
 function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
@@ -925,7 +1360,8 @@ function canSendControlCommands(socket: Socket, input: ControlInputMessage) {
     command.targetId !== socket.data.receiverId ||
     (command.command !== "set_track_state" &&
       command.command !== "request_track_play" &&
-      command.command !== "request_track_stop")
+      command.command !== "request_track_stop" &&
+      command.command !== "submit_color_challenge_choice")
   ) {
     return false;
   }
@@ -936,7 +1372,8 @@ function canSendControlCommands(socket: Socket, input: ControlInputMessage) {
 
   return (
     command.command === "request_track_play" ||
-    command.command === "request_track_stop"
+    command.command === "request_track_stop" ||
+    command.command === "submit_color_challenge_choice"
   );
 }
 
@@ -1565,6 +2002,120 @@ function assignEconomyPatch(
   return true;
 }
 
+function assignColorChallengePatch(
+  state: InternalReceiverState,
+  patch: SetModuleStatePayload["patch"]
+) {
+  const challenge = state.config.colorChallenge;
+  const wasRunning =
+    challenge.visible && challenge.enabled && !challenge.gameOver;
+  let shouldStartNewRound = false;
+
+  if (typeof patch.visible === "boolean") {
+    challenge.visible = patch.visible;
+  }
+
+  if (typeof patch.enabled === "boolean") {
+    challenge.enabled = patch.enabled;
+  }
+
+  challenge.startingScore = clampNonNegativeNumber(
+    patch.startingScore,
+    challenge.startingScore
+  );
+  challenge.score = clampNonNegativeNumber(patch.score, challenge.score);
+  challenge.maxReward = clampNonNegativeNumber(
+    patch.maxReward,
+    challenge.maxReward
+  );
+  challenge.minWrongPenalty = clampNonNegativeNumber(
+    patch.minWrongPenalty,
+    challenge.minWrongPenalty
+  );
+  challenge.maxWrongPenalty = clampNonNegativeNumber(
+    patch.maxWrongPenalty,
+    challenge.maxWrongPenalty
+  );
+  challenge.missPenalty = clampNonNegativeNumber(
+    patch.missPenalty,
+    challenge.missPenalty
+  );
+
+  if (challenge.maxWrongPenalty < challenge.minWrongPenalty) {
+    challenge.maxWrongPenalty = challenge.minWrongPenalty;
+  }
+
+  const intervals = normalizeColorChallengeIntervals(
+    clampColorChallengeInterval(patch.minIntervalMs, challenge.minIntervalMs),
+    clampColorChallengeInterval(patch.maxIntervalMs, challenge.maxIntervalMs)
+  );
+  if (
+    intervals.minIntervalMs !== challenge.minIntervalMs ||
+    intervals.maxIntervalMs !== challenge.maxIntervalMs
+  ) {
+    shouldStartNewRound = true;
+  }
+  challenge.minIntervalMs = intervals.minIntervalMs;
+  challenge.maxIntervalMs = intervals.maxIntervalMs;
+
+  if (typeof patch.refreshAssignedColorEachIteration === "boolean") {
+    challenge.refreshAssignedColorEachIteration =
+      patch.refreshAssignedColorEachIteration;
+  }
+
+  if (typeof patch.assignedColorId === "string") {
+    const assignedColorId = patch.assignedColorId.trim();
+    if (
+      assignedColorId &&
+      challenge.palette.some(color => color.colorId === assignedColorId)
+    ) {
+      challenge.assignedColorId = assignedColorId;
+      shouldStartNewRound = true;
+    }
+  } else if (patch.assignedColorId === null) {
+    challenge.assignedColorId = null;
+    shouldStartNewRound = true;
+  }
+
+  if ("palette" in patch) {
+    const palette = normalizeColorChallengePalette(patch.palette);
+    if (palette) {
+      challenge.palette = palette;
+      if (
+        challenge.assignedColorId &&
+        !palette.some(color => color.colorId === challenge.assignedColorId)
+      ) {
+        challenge.assignedColorId = null;
+      }
+      shouldStartNewRound = true;
+    }
+  }
+
+  if (typeof patch.gameOver === "boolean") {
+    challenge.gameOver = patch.gameOver;
+    if (!patch.gameOver && challenge.score <= 0) {
+      challenge.score = challenge.startingScore;
+    }
+    shouldStartNewRound = !patch.gameOver;
+  }
+
+  if (challenge.score <= 0 && patch.gameOver !== false) {
+    challenge.score = 0;
+    challenge.gameOver = true;
+  }
+
+  const isRunning =
+    challenge.visible && challenge.enabled && !challenge.gameOver;
+  if (
+    isRunning &&
+    (!wasRunning || shouldStartNewRound || !hasValidColorChallengeRound(state))
+  ) {
+    startColorChallengeRound(state);
+  }
+
+  return true;
+}
+
 function stopAllTracks(state: InternalReceiverState) {
   state.config.tracks.forEach(track => {
     track.playing = false;
@@ -1611,6 +2162,9 @@ function applyCommand(
       if (command.payload.module === "economy") {
         return assignEconomyPatch(state, command.payload.patch);
       }
+      if (command.payload.module === "colorChallenge") {
+        return assignColorChallengePatch(state, command.payload.patch);
+      }
       return false;
     case "set_vote_state":
       return applyVoteState(state, command.payload.vote);
@@ -1632,6 +2186,10 @@ function applyCommand(
       return requestTrackStop(state, command.payload);
     case "economy_reset":
       return resetEconomy(state);
+    case "submit_color_challenge_choice":
+      return submitColorChallengeChoice(state, command.payload);
+    case "color_challenge_reset":
+      return resetColorChallenge(state);
   }
 }
 
@@ -1686,6 +2244,22 @@ export function getTimingExport(): TimingExport {
   };
 }
 
+export function getColorChallengeExport(): ColorChallengeExport {
+  const events = [...colorChallengeEvents].sort(
+    (left, right) => right.timestamp - left.timestamp
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalEvents: events.length,
+    correct: events.filter(event => event.reason === "correct").length,
+    wrong: events.filter(event => event.reason === "wrong").length,
+    misses: events.filter(event => event.reason === "miss").length,
+    gameOvers: events.filter(event => event.gameOver).length,
+    events,
+  };
+}
+
 function removeDisconnectedReceivers(): string[] {
   const removedIds: string[] = [];
 
@@ -1693,6 +2267,7 @@ function removeDisconnectedReceivers(): string[] {
     if (!state.connected) {
       destroyPulseLoop(receiverId);
       clearEconomyPlayTimeout(receiverId);
+      clearColorChallengeTimeout(receiverId);
       dropReceiverFromVoteSessions(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
@@ -1712,6 +2287,7 @@ function removeExpiredReceivers(now = Date.now()): string[] {
     ) {
       destroyPulseLoop(receiverId);
       clearEconomyPlayTimeout(receiverId);
+      clearColorChallengeTimeout(receiverId);
       dropReceiverFromVoteSessions(receiverId);
       receivers.delete(receiverId);
       removedIds.push(receiverId);
@@ -2051,6 +2627,7 @@ function detachSocketFromPreviousReceiver(
     previousState.disconnectedAt = Date.now();
     stopAllTracks(previousState);
     clearEconomyPlayTimeout(previousReceiverId);
+    clearColorChallengeTimeout(previousReceiverId);
     incrementConfigVersion(previousState);
     syncPulseLoop(previousReceiverId, previousState);
   }
@@ -2114,6 +2691,7 @@ function registerReceiver(socket: Socket, data: ReceiverRegistration) {
   socket.join(receiverRoom(receiverId));
   syncPulseLoop(receiverId, receivers.get(receiverId)!);
   scheduleEconomyPlayTimeout(receiverId, receivers.get(receiverId)!);
+  scheduleColorChallengeTimeout(receiverId, receivers.get(receiverId)!);
   emitReceiverState(socket, receivers.get(receiverId)!);
   broadcastReceiverList();
 }
@@ -2128,6 +2706,7 @@ function handleDisconnect(socket: Socket) {
       state.disconnectedAt = Date.now();
       stopAllTracks(state);
       clearEconomyPlayTimeout(state.receiverId);
+      clearColorChallengeTimeout(state.receiverId);
       incrementConfigVersion(state);
       syncPulseLoop(state.receiverId, state);
     }
@@ -2264,6 +2843,7 @@ export function dispatchControlMessage(
 
       syncPulseLoop(receiverId, state);
       scheduleEconomyPlayTimeout(receiverId, state);
+      scheduleColorChallengeTimeout(receiverId, state);
       io!
         .to(receiverRoom(receiverId))
         .emit(WS_EVENTS.RECEIVER_COMMAND, command);
@@ -2302,6 +2882,7 @@ export function dispatchControlMessage(
 
   syncPulseLoop(command.targetId, state);
   scheduleEconomyPlayTimeout(command.targetId, state);
+  scheduleColorChallengeTimeout(command.targetId, state);
   io.to(receiverRoom(command.targetId)).emit(
     WS_EVENTS.RECEIVER_COMMAND,
     command
@@ -2339,10 +2920,13 @@ export async function resetWebSocketState() {
   pulseLoops.clear();
   economyPlayTimeouts.forEach(timeout => clearTimeout(timeout));
   economyPlayTimeouts.clear();
+  colorChallengeTimeouts.forEach(timeout => clearTimeout(timeout));
+  colorChallengeTimeouts.clear();
   voteSessions.forEach(session => clearVoteTimeout(session));
   voteSessions.clear();
   receiverActiveVotes.clear();
   timingEvents.length = 0;
+  colorChallengeEvents.length = 0;
   receivers.clear();
 
   if (cleanupInterval) {

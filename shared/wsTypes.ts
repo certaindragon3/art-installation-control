@@ -195,6 +195,46 @@ export interface EconomyConfig extends VisibilityConfig {
   lastError: string | null;
 }
 
+export interface ColorChallengeColor {
+  colorId: string;
+  label: string;
+  color: string;
+}
+
+export interface ColorChallengeResult {
+  reason: "correct" | "wrong" | "miss" | "reset";
+  choiceIndex: number | null;
+  colorId: string | null;
+  assignedColorId: string | null;
+  correctChoiceIndex: number | null;
+  t: number;
+  greenness: number;
+  scoreDelta: number;
+  score: number;
+  gameOver: boolean;
+  resolvedAt: string;
+}
+
+export interface ColorChallengeConfig extends VisibilityConfig {
+  score: number;
+  startingScore: number;
+  assignedColorId: string | null;
+  palette: ColorChallengeColor[];
+  choices: ColorChallengeColor[];
+  correctChoiceIndex: number | null;
+  iterationStartedAt: string | null;
+  iterationDurationMs: number;
+  minIntervalMs: number;
+  maxIntervalMs: number;
+  maxReward: number;
+  minWrongPenalty: number;
+  maxWrongPenalty: number;
+  missPenalty: number;
+  refreshAssignedColorEachIteration: boolean;
+  gameOver: boolean;
+  lastResult: ColorChallengeResult | null;
+}
+
 export interface ReceiverConfig {
   tracks: TrackState[];
   groups: GroupState[];
@@ -206,6 +246,7 @@ export interface ReceiverConfig {
   textDisplay: TextDisplayConfig;
   visuals: VisualConfig;
   economy: EconomyConfig;
+  colorChallenge: ColorChallengeConfig;
 }
 
 export type ModuleName =
@@ -215,7 +256,8 @@ export type ModuleName =
   | "timing"
   | "textDisplay"
   | "visuals"
-  | "economy";
+  | "economy"
+  | "colorChallenge";
 
 // ─── Unified Commands ────────────────────────────────────────────────
 export interface SetTrackStatePayload {
@@ -269,6 +311,15 @@ export interface RequestTrackStopPayload {
 }
 
 export interface EconomyResetPayload extends JsonRecord {}
+
+export interface SubmitColorChallengeChoicePayload extends JsonRecord {
+  choiceIndex: number;
+  colorId?: string;
+  pressedAt?: string;
+  clientTimestamp?: number;
+}
+
+export interface ColorChallengeResetPayload extends JsonRecord {}
 
 export type UnifiedCommand =
   | {
@@ -348,6 +399,18 @@ export type UnifiedCommand =
       targetId: string;
       payload: EconomyResetPayload;
       timestamp: string;
+    }
+  | {
+      command: "submit_color_challenge_choice";
+      targetId: string;
+      payload: SubmitColorChallengeChoicePayload;
+      timestamp: string;
+    }
+  | {
+      command: "color_challenge_reset";
+      targetId: string;
+      payload: ColorChallengeResetPayload;
+      timestamp: string;
     };
 
 export type ControlInputMessage = UnifiedCommand | LegacyControlMessage;
@@ -414,6 +477,25 @@ export interface TimingExport {
   attempts: TimingEventExport[];
 }
 
+export interface ColorChallengeEventExport extends ColorChallengeResult {
+  userId: string;
+  receiverId: string;
+  label: string;
+  timestamp: number;
+  isoTimestamp: string;
+  choices: ColorChallengeColor[];
+}
+
+export interface ColorChallengeExport {
+  generatedAt: string;
+  totalEvents: number;
+  correct: number;
+  wrong: number;
+  misses: number;
+  gameOvers: number;
+  events: ColorChallengeEventExport[];
+}
+
 // ─── Unity Interaction Events ────────────────────────────────────────
 export interface UnityInteractionEvent {
   sourceRole: "controller" | "receiver";
@@ -454,6 +536,12 @@ export const DEFAULT_ICON_COLOR = "#6366f1";
 export const DEFAULT_TIMING_TARGET_CENTER = 0.5;
 export const DEFAULT_TIMING_TOLERANCE = 0.08;
 export const DEFAULT_TRACK_CATEGORY_COLOR = "#64748b";
+export const DEFAULT_COLOR_CHALLENGE_PALETTE: readonly ColorChallengeColor[] = [
+  { colorId: "red", label: "Red", color: "#ef4444" },
+  { colorId: "green", label: "Green", color: "#22c55e" },
+  { colorId: "blue", label: "Blue", color: "#3b82f6" },
+  { colorId: "yellow", label: "Yellow", color: "#eab308" },
+];
 
 export function clampNormalizedCoordinate(value: number, fallback = 0.5) {
   if (!Number.isFinite(value)) {
@@ -461,6 +549,19 @@ export function clampNormalizedCoordinate(value: number, fallback = 0.5) {
   }
 
   return Math.min(1, Math.max(0, value));
+}
+
+export function clamp01(value: number, fallback = 0) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(1, Math.max(0, value));
+}
+
+export function calculateColorChallengeGreenness(t: number) {
+  const progress = clamp01(t, 0);
+  return 1 - Math.abs(2 * progress - 1);
 }
 
 export function clampTimingTolerance(
@@ -571,6 +672,30 @@ export function createDefaultEconomyConfig(
   };
 }
 
+export function createDefaultColorChallengeConfig(): ColorChallengeConfig {
+  return {
+    visible: false,
+    enabled: false,
+    score: 1,
+    startingScore: 1,
+    assignedColorId: null,
+    palette: DEFAULT_COLOR_CHALLENGE_PALETTE.map(color => ({ ...color })),
+    choices: [],
+    correctChoiceIndex: null,
+    iterationStartedAt: null,
+    iterationDurationMs: 2500,
+    minIntervalMs: 2000,
+    maxIntervalMs: 3000,
+    maxReward: 3,
+    minWrongPenalty: 0.5,
+    maxWrongPenalty: 1.5,
+    missPenalty: 1,
+    refreshAssignedColorEachIteration: true,
+    gameOver: false,
+    lastResult: null,
+  };
+}
+
 export function calculateTrackCost(
   track: Pick<TrackState, "durationSeconds">,
   economy: Pick<EconomyConfig, "inflation">
@@ -645,6 +770,7 @@ export function createDefaultReceiverConfig(): ReceiverConfig {
       iconColor: DEFAULT_ICON_COLOR,
     },
     economy: createDefaultEconomyConfig(),
+    colorChallenge: createDefaultColorChallengeConfig(),
   };
 }
 

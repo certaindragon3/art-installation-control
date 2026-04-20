@@ -565,7 +565,106 @@ Recommended movement example:
 }
 ```
 
-## 11. Reset Everything
+## 11. Color Challenge / Score Game
+
+Color Challenge is separate from the Sound Economy. It uses
+`ReceiverState.config.colorChallenge`, server-generated two-choice rounds, and
+server-authoritative score changes.
+
+Enable the challenge for one receiver:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_module_state",
+    "targetId": "screen-a",
+    "payload": {
+      "module": "colorChallenge",
+      "patch": {
+        "visible": true,
+        "enabled": true,
+        "score": 1,
+        "startingScore": 1,
+        "minIntervalMs": 2000,
+        "maxIntervalMs": 3000,
+        "maxReward": 3,
+        "minWrongPenalty": 0.5,
+        "maxWrongPenalty": 1.5,
+        "missPenalty": 1,
+        "refreshAssignedColorEachIteration": true
+      }
+    }
+  }'
+```
+
+Set the palette:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_module_state",
+    "targetId": "screen-a",
+    "payload": {
+      "module": "colorChallenge",
+      "patch": {
+        "palette": [
+          { "colorId": "red", "label": "Red", "color": "#ef4444" },
+          { "colorId": "green", "label": "Green", "color": "#22c55e" },
+          { "colorId": "blue", "label": "Blue", "color": "#3b82f6" },
+          { "colorId": "yellow", "label": "Yellow", "color": "#eab308" }
+        ]
+      }
+    }
+  }'
+```
+
+Receiver pages submit choices automatically. For external testing, submit the
+left or right choice by index:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "submit_color_challenge_choice",
+    "targetId": "screen-a",
+    "payload": {
+      "choiceIndex": 0,
+      "pressedAt": "2026-04-20T13:30:00.000Z"
+    }
+  }'
+```
+
+Reset score and revive:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "color_challenge_reset",
+    "targetId": "screen-a",
+    "payload": {}
+  }'
+```
+
+Export results:
+
+```bash
+curl "$BASE_URL/api/controller/color-challenge/export"
+```
+
+Key behavior:
+
+- Each round has exactly two choices.
+- One choice always matches `assignedColorId`.
+- `greenness = 1 - abs(2 * t - 1)`, where `t` is round progress from `0..1`.
+- Correct choices add `maxReward * greenness`.
+- Wrong choices subtract `lerp(minWrongPenalty, maxWrongPenalty, greenness)`.
+- No press before timeout subtracts `missPenalty`.
+- `score <= 0` sets `gameOver: true`.
+
+## 12. Reset Everything
 
 Reset all state on one receiver:
 
@@ -591,7 +690,7 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
-## 12. Suggested Quick Test Order
+## 13. Suggested Quick Test Order
 
 1. `GET /api/controller/receivers`
 2. Create a group
@@ -602,4 +701,7 @@ curl -X POST "$BASE_URL/api/controller/command" \
 7. Open `/receiver/:id` and try the timing button
 8. Export timing results
 9. Request a track from receiver UI and confirm currency decreases
-10. Reset all
+10. Enable Color Challenge and confirm two color choices appear
+11. Tap the assigned color near the center of the timing bar
+12. Export Color Challenge results
+13. Reset all

@@ -100,16 +100,16 @@ const greenness = 1 - Math.abs(2 * t - 1);
 
 ## 验收标准
 
-- [ ] `ColorHitGame.cs` 已归档到 Phase 11 source。
-- [ ] Server 能为 receiver 生成合法 two-choice round。
-- [ ] 每轮 choices 至少一个是 assigned color。
-- [ ] Receiver pointer 在 iteration duration 内移动。
-- [ ] 正确点击按 greenness 奖励。
-- [ ] 错误点击按 greenness 扣分。
-- [ ] 超时扣 miss penalty。
-- [ ] Score <= 0 时 game over。
-- [ ] Controller 可 reset / revive。
-- [ ] 本地 `corepack pnpm check`、`corepack pnpm test`、`corepack pnpm build` 通过。
+- [x] `ColorHitGame.cs` 已归档到 Phase 11 source。
+- [x] Server 能为 receiver 生成合法 two-choice round。
+- [x] 每轮 choices 至少一个是 assigned color。
+- [x] Receiver pointer 在 iteration duration 内移动。
+- [x] 正确点击按 greenness 奖励。
+- [x] 错误点击按 greenness 扣分。
+- [x] 超时扣 miss penalty。
+- [x] Score <= 0 时 game over。
+- [x] Controller 可 reset / revive。
+- [x] 本地 `corepack pnpm check`、`corepack pnpm test`、`corepack pnpm build` 通过。
 
 ## 建议交付顺序
 

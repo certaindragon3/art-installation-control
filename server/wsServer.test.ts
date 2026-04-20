@@ -111,6 +111,27 @@ describe("Phase 1 shared protocol", () => {
       gameOver: false,
       lastError: null,
     });
+    expect(config.colorChallenge).toMatchObject({
+      visible: false,
+      enabled: false,
+      score: 1,
+      startingScore: 1,
+      assignedColorId: null,
+      choices: [],
+      correctChoiceIndex: null,
+      iterationStartedAt: null,
+      iterationDurationMs: 2500,
+      minIntervalMs: 2000,
+      maxIntervalMs: 3000,
+      maxReward: 3,
+      minWrongPenalty: 0.5,
+      maxWrongPenalty: 1.5,
+      missPenalty: 1,
+      refreshAssignedColorEachIteration: true,
+      gameOver: false,
+      lastResult: null,
+    });
+    expect(config.colorChallenge.palette).toHaveLength(4);
     expect(config.textDisplay).toMatchObject({
       visible: false,
       enabled: true,

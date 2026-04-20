@@ -13,6 +13,7 @@ import { isLegacyMessageType, WS_EVENTS } from "../shared/wsTypes";
 import {
   clearOfflineReceivers,
   dispatchControlMessage,
+  getColorChallengeExport,
   getConfigSnapshot,
   getReceiverList,
   getTimingExport,
@@ -33,6 +34,8 @@ const UNIFIED_COMMANDS = new Set<UnifiedCommand["command"]>([
   "request_track_play",
   "request_track_stop",
   "economy_reset",
+  "submit_color_challenge_choice",
+  "color_challenge_reset",
 ]);
 
 const MODULE_NAMES = new Set<ModuleName>([
@@ -43,6 +46,7 @@ const MODULE_NAMES = new Set<ModuleName>([
   "textDisplay",
   "visuals",
   "economy",
+  "colorChallenge",
 ]);
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -436,6 +440,45 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
         timestamp,
       };
     }
+    case "submit_color_challenge_choice": {
+      if (
+        !isRecord(body.payload) ||
+        typeof body.payload.choiceIndex !== "number" ||
+        !Number.isFinite(body.payload.choiceIndex)
+      ) {
+        return null;
+      }
+
+      return {
+        command: "submit_color_challenge_choice",
+        targetId: body.targetId.trim(),
+        payload: {
+          choiceIndex: body.payload.choiceIndex,
+          colorId:
+            typeof body.payload.colorId === "string"
+              ? body.payload.colorId
+              : undefined,
+          pressedAt:
+            typeof body.payload.pressedAt === "string"
+              ? body.payload.pressedAt
+              : undefined,
+          clientTimestamp:
+            typeof body.payload.clientTimestamp === "number" &&
+            Number.isFinite(body.payload.clientTimestamp)
+              ? body.payload.clientTimestamp
+              : undefined,
+        },
+        timestamp,
+      };
+    }
+    case "color_challenge_reset": {
+      return {
+        command: "color_challenge_reset",
+        targetId: body.targetId.trim(),
+        payload: {},
+        timestamp,
+      };
+    }
   }
 
   return null;
@@ -509,6 +552,13 @@ export function registerControllerApi(app: Express) {
     res.status(200).json({
       ok: true,
       timing: getTimingExport(),
+    });
+  });
+
+  app.get("/api/controller/color-challenge/export", (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      colorChallenge: getColorChallengeExport(),
     });
   });
 

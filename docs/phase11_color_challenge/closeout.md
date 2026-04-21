@@ -12,10 +12,11 @@ Depends on: Phase 10 final-touch economy is already delivered. Phase 11 remains 
 
 - Implemented the professor `ColorHitGame.cs` flow as a Web / Socket.IO module.
 - Added independent `ReceiverState.config.colorChallenge` state for palette, assigned color, two-choice rounds, timing duration, scoring parameters, and game over.
-- Server now generates each round and guarantees exactly two distinct choices with one matching `assignedColorId`.
+- Receiver pages now run the round loop locally so button press and next-round transition no longer wait on network RTT.
+- Server validates or falls back each submitted round and guarantees exactly two distinct choices with one matching `assignedColorId`.
 - Receiver pages render assigned color, score, red-green-red timing bar, moving pointer, and two color buttons.
-- Receiver choice submissions are server-authoritative through `submit_color_challenge_choice`.
-- Server applies correct reward, wrong-choice penalty, timeout miss penalty, next-round generation, and score game over.
+- Receiver choice submissions use `submit_color_challenge_choice` with `roundId` / `submissionId` / optional `nextRound` for receiver-led reconciliation.
+- Server applies correct reward, wrong-choice penalty, timeout miss penalty, next-round reconciliation, and score game over.
 - Controller can show/hide, enable/disable, reset/revive, tune timing and scoring, edit palette, and export results.
 - Color Challenge export is available for professor / Unity review.
 
@@ -43,6 +44,7 @@ interface ColorChallengeConfig {
   enabled: boolean;
   score: number;
   startingScore: number;
+  iterationId: string | null;
   assignedColorId: string | null;
   palette: Array<{ colorId: string; label: string; color: string }>;
   choices: Array<{ colorId: string; label: string; color: string }>;
@@ -69,6 +71,7 @@ Default values:
   "enabled": false,
   "score": 1,
   "startingScore": 1,
+  "iterationId": null,
   "assignedColorId": null,
   "palette": [
     { "colorId": "red", "label": "Red", "color": "#ef4444" },
@@ -137,7 +140,7 @@ Payload:
 Behavior:
 
 - `targetId: "*"` broadcasts the same patch to all current receivers.
-- `visible` and `enabled` together start a server-generated round.
+- `visible` and `enabled` together start a valid round. Receiver pages may then continue rounds locally and reconcile back through the server.
 - `minIntervalMs` and `maxIntervalMs` are milliseconds and are clamped to `250..600000`.
 - If `maxIntervalMs < minIntervalMs`, the server normalizes the interval bounds.
 - Penalty / reward numbers are clamped to non-negative values.
@@ -175,18 +178,34 @@ Receiver pages send this command automatically. External tools can use the same 
   "command": "submit_color_challenge_choice",
   "targetId": "screen-a",
   "payload": {
+    "roundId": "color-round-123",
+    "submissionId": "color-submit-456",
     "choiceIndex": 0,
     "colorId": "green",
-    "pressedAt": "2026-04-20T13:30:00.000Z"
+    "pressedAt": "2026-04-20T13:30:00.000Z",
+    "nextRound": {
+      "iterationId": "color-round-124",
+      "assignedColorId": "green",
+      "choices": [
+        { "colorId": "green", "label": "Green", "color": "#22c55e" },
+        { "colorId": "red", "label": "Red", "color": "#ef4444" }
+      ],
+      "correctChoiceIndex": 0,
+      "iterationStartedAt": "2026-04-20T13:30:00.000Z",
+      "iterationDurationMs": 2400
+    }
   }
 }
 ```
 
 Rules:
 
-- `choiceIndex` must be `0` or `1`.
+- `roundId` should match the receiver's current `iterationId` when using receiver-led gameplay.
+- `submissionId` is echoed back in `lastResult` and export events so receivers can reconcile optimistic UI.
+- `choiceIndex` may be `0`, `1`, or `null` for a receiver-led timeout miss.
 - `colorId` is optional, but when provided it must match the selected choice.
 - `pressedAt` is optional ISO time. If absent, the server uses receive time.
+- `nextRound` is optional. Receiver pages send it so the server can accept the locally generated next round instead of re-rolling one.
 - Future timestamps are clamped to server receive time.
 - Receivers may only submit choices for their own final receiver ID.
 - Controller / Unity / HTTP may submit for any target for testing.
@@ -202,7 +221,7 @@ const greenness = 1 - Math.abs(2 * t - 1);
 - Wrong choice: `score -= minWrongPenalty + (maxWrongPenalty - minWrongPenalty) * greenness`
 - Timeout with no press: `score -= missPenalty`
 - `score <= 0` sets `gameOver: true` and clamps `score` to `0`
-- If still alive, the server immediately starts the next round
+- If still alive, the receiver immediately starts the next round locally and the server reconciles to the submitted `nextRound` when valid
 
 ### Reset / Revive
 

@@ -7,21 +7,25 @@ import {
   type PulseScheduler,
 } from "./pulseScheduler";
 import {
+  assignColorChallengeRound,
   calculateTrackCost,
   clamp01,
   clampTimingTolerance,
   clampNormalizedCoordinate,
   CONFIG_TTL_MS,
-  calculateColorChallengeGreenness,
+  createColorChallengeRound,
   createDefaultColorChallengeConfig,
+  evaluateColorChallengeRound,
   type ControlInputMessage,
   type ColorChallengeColor,
   type ColorChallengeEventExport,
   type ColorChallengeExport,
   type ColorChallengeResult,
+  type ColorChallengeRoundSnapshot,
   createDefaultEconomyConfig,
   createDefaultReceiverConfig,
   type GroupState,
+  hasValidColorChallengeRound,
   type MapMovementConfig,
   legacyControlMessageToUnifiedCommand,
   type ModuleName,
@@ -332,10 +336,6 @@ function normalizeColorChallengePalette(value: unknown) {
   return palette.length >= 2 ? palette : null;
 }
 
-function pickRandomItem<T>(items: T[]): T {
-  return items[Math.floor(Math.random() * items.length)]!;
-}
-
 function clampColorChallengeInterval(value: unknown, fallback: number) {
   if (!hasFiniteNumber(value)) {
     return fallback;
@@ -362,35 +362,6 @@ function normalizeColorChallengeIntervals(
     : { minIntervalMs: minMs, maxIntervalMs: maxMs };
 }
 
-function randomColorChallengeDurationMs(
-  minIntervalMs: number,
-  maxIntervalMs: number
-) {
-  if (maxIntervalMs <= minIntervalMs) {
-    return minIntervalMs;
-  }
-
-  return Math.round(
-    minIntervalMs + Math.random() * (maxIntervalMs - minIntervalMs)
-  );
-}
-
-function hasValidColorChallengeRound(state: InternalReceiverState) {
-  const challenge = state.config.colorChallenge;
-  return (
-    challenge.choices.length === 2 &&
-    challenge.correctChoiceIndex !== null &&
-    challenge.correctChoiceIndex >= 0 &&
-    challenge.correctChoiceIndex < challenge.choices.length &&
-    Boolean(challenge.iterationStartedAt) &&
-    challenge.iterationDurationMs > 0 &&
-    challenge.assignedColorId !== null &&
-    challenge.choices.some(
-      choice => choice.colorId === challenge.assignedColorId
-    )
-  );
-}
-
 function startColorChallengeRound(
   state: InternalReceiverState,
   now = Date.now()
@@ -400,34 +371,107 @@ function startColorChallengeRound(
     challenge.palette = createDefaultColorChallengeConfig().palette;
   }
 
-  const assigned =
-    !challenge.refreshAssignedColorEachIteration &&
-    challenge.assignedColorId !== null
-      ? challenge.palette.find(
-          color => color.colorId === challenge.assignedColorId
-        )
-      : null;
-  const assignedColor = assigned ?? pickRandomItem(challenge.palette);
-  const otherChoices = challenge.palette.filter(
-    color => color.colorId !== assignedColor.colorId
+  assignColorChallengeRound(
+    challenge,
+    createColorChallengeRound(challenge, new Date(now).toISOString())
   );
-  const otherColor = pickRandomItem(otherChoices);
-  const choices =
-    Math.random() < 0.5
-      ? [assignedColor, otherColor]
-      : [otherColor, assignedColor];
-  const correctChoiceIndex = choices.findIndex(
-    choice => choice.colorId === assignedColor.colorId
-  );
+}
 
-  challenge.assignedColorId = assignedColor.colorId;
-  challenge.choices = choices.map(choice => ({ ...choice }));
-  challenge.correctChoiceIndex = correctChoiceIndex;
-  challenge.iterationStartedAt = new Date(now).toISOString();
-  challenge.iterationDurationMs = randomColorChallengeDurationMs(
-    challenge.minIntervalMs,
-    challenge.maxIntervalMs
+function normalizeColorChallengeRoundProposal(
+  state: InternalReceiverState,
+  proposal: SubmitColorChallengeChoicePayload["nextRound"],
+  resolvedAt: string
+): ColorChallengeRoundSnapshot | null {
+  const challenge = state.config.colorChallenge;
+  if (!proposal || typeof proposal !== "object") {
+    return null;
+  }
+
+  const iterationId =
+    typeof proposal.iterationId === "string" ? proposal.iterationId.trim() : "";
+  if (!iterationId) {
+    return null;
+  }
+
+  const assignedColorId =
+    typeof proposal.assignedColorId === "string"
+      ? proposal.assignedColorId.trim()
+      : "";
+  const assignedColor = challenge.palette.find(
+    color => color.colorId === assignedColorId
   );
+  if (!assignedColor) {
+    return null;
+  }
+
+  if (
+    !challenge.refreshAssignedColorEachIteration &&
+    challenge.assignedColorId !== null &&
+    assignedColorId !== challenge.assignedColorId
+  ) {
+    return null;
+  }
+
+  if (!Array.isArray(proposal.choices) || proposal.choices.length !== 2) {
+    return null;
+  }
+
+  const normalizedChoices = proposal.choices
+    .map(choice => {
+      const colorId =
+        typeof choice?.colorId === "string" ? choice.colorId.trim() : "";
+      return challenge.palette.find(color => color.colorId === colorId) ?? null;
+    })
+    .filter((choice): choice is ColorChallengeColor => choice !== null);
+
+  if (
+    normalizedChoices.length !== 2 ||
+    normalizedChoices[0]!.colorId === normalizedChoices[1]!.colorId ||
+    !normalizedChoices.some(choice => choice.colorId === assignedColorId)
+  ) {
+    return null;
+  }
+
+  const correctChoiceIndex = Math.trunc(proposal.correctChoiceIndex);
+  if (
+    !Number.isInteger(correctChoiceIndex) ||
+    correctChoiceIndex < 0 ||
+    correctChoiceIndex >= normalizedChoices.length ||
+    normalizedChoices[correctChoiceIndex]!.colorId !== assignedColorId
+  ) {
+    return null;
+  }
+
+  const rawDuration = Number(proposal.iterationDurationMs);
+  const iterationDurationMs = clampColorChallengeInterval(
+    rawDuration,
+    challenge.iterationDurationMs
+  );
+  if (
+    !Number.isFinite(rawDuration) ||
+    Math.round(rawDuration) !== rawDuration ||
+    iterationDurationMs !== rawDuration
+  ) {
+    return null;
+  }
+
+  const startedAt =
+    typeof proposal.iterationStartedAt === "string" &&
+    proposal.iterationStartedAt.trim()
+      ? proposal.iterationStartedAt
+      : resolvedAt;
+  const parsedStartedAt = parseIsoMs(startedAt, NaN);
+
+  return {
+    iterationId,
+    assignedColorId,
+    choices: normalizedChoices.map(choice => ({ ...choice })),
+    correctChoiceIndex,
+    iterationStartedAt: Number.isFinite(parsedStartedAt)
+      ? new Date(parsedStartedAt).toISOString()
+      : resolvedAt,
+    iterationDurationMs,
+  };
 }
 
 function resetColorChallenge(state: InternalReceiverState) {
@@ -456,12 +500,14 @@ function resetColorChallenge(state: InternalReceiverState) {
     colorId: null,
     assignedColorId: challenge.assignedColorId,
     correctChoiceIndex: null,
+    iterationId: challenge.iterationId,
     t: 0,
     greenness: 0,
     scoreDelta: 0,
     score: challenge.score,
     gameOver: false,
     resolvedAt: new Date().toISOString(),
+    submissionId: null,
   };
 
   if (challenge.visible && challenge.enabled) {
@@ -501,7 +547,8 @@ function recordColorChallengeResult(
 
 function applyColorChallengeScoreDelta(
   state: InternalReceiverState,
-  result: Omit<ColorChallengeResult, "score" | "gameOver">
+  result: Omit<ColorChallengeResult, "score" | "gameOver">,
+  nextRound: ColorChallengeRoundSnapshot | null = null
 ) {
   const challenge = state.config.colorChallenge;
   challenge.score = Math.max(0, challenge.score + result.scoreDelta);
@@ -519,6 +566,11 @@ function applyColorChallengeScoreDelta(
   recordColorChallengeResult(state, nextResult);
 
   if (!challenge.gameOver) {
+    if (nextRound) {
+      assignColorChallengeRound(challenge, nextRound);
+      return;
+    }
+
     startColorChallengeRound(state, parseIsoMs(result.resolvedAt, Date.now()));
   }
 }
@@ -528,30 +580,26 @@ function resolveColorChallengeMiss(
   now = Date.now()
 ) {
   const challenge = state.config.colorChallenge;
-  if (!isColorChallengeRunning(state) || !hasValidColorChallengeRound(state)) {
+  if (
+    !isColorChallengeRunning(state) ||
+    !hasValidColorChallengeRound(challenge)
+  ) {
     return false;
   }
 
-  const startedAtMs = parseIsoMs(challenge.iterationStartedAt, NaN);
-  if (!Number.isFinite(startedAtMs)) {
-    return false;
-  }
-
-  const elapsedMs = now - startedAtMs;
-  if (elapsedMs < challenge.iterationDurationMs) {
+  const evaluation = evaluateColorChallengeRound({
+    challenge,
+    choiceIndex: null,
+    resolvedAtMs: now,
+  });
+  if (!evaluation) {
     return false;
   }
 
   applyColorChallengeScoreDelta(state, {
-    reason: "miss",
-    choiceIndex: null,
-    colorId: null,
-    assignedColorId: challenge.assignedColorId,
-    correctChoiceIndex: challenge.correctChoiceIndex,
-    t: 1,
-    greenness: 0,
-    scoreDelta: -challenge.missPenalty,
+    ...evaluation,
     resolvedAt: new Date(now).toISOString(),
+    submissionId: null,
   });
 
   return true;
@@ -562,16 +610,29 @@ function submitColorChallengeChoice(
   payload: SubmitColorChallengeChoicePayload
 ) {
   const challenge = state.config.colorChallenge;
-  if (!isColorChallengeRunning(state) || !hasValidColorChallengeRound(state)) {
+  if (
+    !isColorChallengeRunning(state) ||
+    !hasValidColorChallengeRound(challenge)
+  ) {
     return false;
   }
 
-  const choiceIndex = Math.trunc(payload.choiceIndex);
+  const choiceIndex =
+    payload.choiceIndex === null || payload.choiceIndex === undefined
+      ? null
+      : Math.trunc(payload.choiceIndex);
   if (
-    !Number.isInteger(choiceIndex) ||
-    choiceIndex < 0 ||
-    choiceIndex >= challenge.choices.length
+    choiceIndex !== null &&
+    (!Number.isInteger(choiceIndex) ||
+      choiceIndex < 0 ||
+      choiceIndex >= challenge.choices.length)
   ) {
+    return false;
+  }
+
+  const roundId =
+    typeof payload.roundId === "string" ? payload.roundId.trim() : "";
+  if (roundId && roundId !== challenge.iterationId) {
     return false;
   }
 
@@ -583,46 +644,41 @@ function submitColorChallengeChoice(
         ? payload.clientTimestamp
         : now;
   const resolvedPressedAtMs = Math.min(now, pressedAtMs);
-  const startedAtMs = parseIsoMs(challenge.iterationStartedAt, now);
-  const t = clamp01(
-    (resolvedPressedAtMs - startedAtMs) /
-      Math.max(1, challenge.iterationDurationMs),
-    0
-  );
-
-  if (t >= 1) {
-    return resolveColorChallengeMiss(state, resolvedPressedAtMs);
+  if (choiceIndex !== null) {
+    const chosenColor = challenge.choices[choiceIndex]!;
+    if (
+      typeof payload.colorId === "string" &&
+      payload.colorId.trim() &&
+      payload.colorId.trim() !== chosenColor.colorId
+    ) {
+      return false;
+    }
   }
 
-  const chosenColor = challenge.choices[choiceIndex]!;
-  if (
-    typeof payload.colorId === "string" &&
-    payload.colorId.trim() &&
-    payload.colorId.trim() !== chosenColor.colorId
-  ) {
+  const evaluation = evaluateColorChallengeRound({
+    challenge,
+    choiceIndex,
+    resolvedAtMs: resolvedPressedAtMs,
+  });
+  if (!evaluation) {
     return false;
   }
 
-  const correct = choiceIndex === challenge.correctChoiceIndex;
-  const greenness = calculateColorChallengeGreenness(t);
-  const scoreDelta = correct
-    ? challenge.maxReward * greenness
-    : -(
-        challenge.minWrongPenalty +
-        (challenge.maxWrongPenalty - challenge.minWrongPenalty) * greenness
-      );
+  const resolvedAt = new Date(resolvedPressedAtMs).toISOString();
+  const submissionId =
+    typeof payload.submissionId === "string" && payload.submissionId.trim()
+      ? payload.submissionId.trim()
+      : null;
+  const nextRound =
+    roundId && payload.nextRound
+      ? normalizeColorChallengeRoundProposal(state, payload.nextRound, resolvedAt)
+      : null;
 
   applyColorChallengeScoreDelta(state, {
-    reason: correct ? "correct" : "wrong",
-    choiceIndex,
-    colorId: chosenColor.colorId,
-    assignedColorId: challenge.assignedColorId,
-    correctChoiceIndex: challenge.correctChoiceIndex,
-    t,
-    greenness,
-    scoreDelta,
-    resolvedAt: new Date(resolvedPressedAtMs).toISOString(),
-  });
+    ...evaluation,
+    resolvedAt,
+    submissionId,
+  }, nextRound);
 
   return true;
 }
@@ -2108,7 +2164,9 @@ function assignColorChallengePatch(
     challenge.visible && challenge.enabled && !challenge.gameOver;
   if (
     isRunning &&
-    (!wasRunning || shouldStartNewRound || !hasValidColorChallengeRound(state))
+    (!wasRunning ||
+      shouldStartNewRound ||
+      !hasValidColorChallengeRound(challenge))
   ) {
     startColorChallengeRound(state);
   }

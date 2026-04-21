@@ -7,6 +7,7 @@ import { resetWebSocketState } from "./wsServer";
 import {
   AUDIO_URLS,
   CONFIG_TTL_MS,
+  createColorChallengeRound,
   DEFAULT_TRACK_LIBRARY,
   DEFAULT_ICON_COLOR,
   type PulseEvent,
@@ -2499,11 +2500,16 @@ describe("controller HTTP API", () => {
           visible: boolean;
           enabled: boolean;
           score: number;
+          iterationId: string;
           assignedColorId: string;
+          palette: Array<{ colorId: string; label: string; color: string }>;
           choices: Array<{ colorId: string }>;
           correctChoiceIndex: number;
           iterationStartedAt: string;
           iterationDurationMs: number;
+          minIntervalMs: number;
+          maxIntervalMs: number;
+          refreshAssignedColorEachIteration: boolean;
         };
       };
     }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
@@ -2553,13 +2559,37 @@ describe("controller HTTP API", () => {
 
     await new Promise(resolve => setTimeout(resolve, 150));
 
+    const firstNextRound = createColorChallengeRound(
+      {
+        palette: firstRound.palette,
+        refreshAssignedColorEachIteration:
+          firstRound.refreshAssignedColorEachIteration,
+        assignedColorId: firstRound.assignedColorId,
+        minIntervalMs: firstRound.minIntervalMs,
+        maxIntervalMs: firstRound.maxIntervalMs,
+      },
+      new Date().toISOString()
+    );
+
     const correctStatePromise = waitForEvent<{
       config: {
         colorChallenge: {
           score: number;
-          lastResult: { reason: string; greenness: number; scoreDelta: number };
+          iterationId: string;
+          lastResult: {
+            reason: string;
+            greenness: number;
+            scoreDelta: number;
+            submissionId: string;
+            iterationId: string;
+          };
+          palette: Array<{ colorId: string; label: string; color: string }>;
+          assignedColorId: string;
           choices: Array<{ colorId: string }>;
           correctChoiceIndex: number;
+          minIntervalMs: number;
+          maxIntervalMs: number;
+          refreshAssignedColorEachIteration: boolean;
         };
       };
     }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
@@ -2572,9 +2602,12 @@ describe("controller HTTP API", () => {
         command: "submit_color_challenge_choice",
         targetId: "color-a",
         payload: {
+          roundId: firstRound.iterationId,
+          submissionId: "submit-1",
           choiceIndex: firstRound.correctChoiceIndex,
           colorId: firstRound.choices[firstRound.correctChoiceIndex].colorId,
           pressedAt: new Date().toISOString(),
+          nextRound: firstNextRound,
         },
       }),
     });
@@ -2583,6 +2616,8 @@ describe("controller HTTP API", () => {
     const correctState = await correctStatePromise;
     expect(correctState.config.colorChallenge.lastResult).toMatchObject({
       reason: "correct",
+      submissionId: "submit-1",
+      iterationId: firstRound.iterationId,
     });
     expect(
       correctState.config.colorChallenge.lastResult.greenness
@@ -2591,16 +2626,36 @@ describe("controller HTTP API", () => {
       correctState.config.colorChallenge.lastResult.scoreDelta
     ).toBeGreaterThan(1.5);
     expect(correctState.config.colorChallenge.score).toBeGreaterThan(1);
+    expect(correctState.config.colorChallenge.iterationId).toBe(
+      firstNextRound.iterationId
+    );
 
     await new Promise(resolve => setTimeout(resolve, 150));
 
     const secondRound = correctState.config.colorChallenge;
     const wrongChoiceIndex = secondRound.correctChoiceIndex === 0 ? 1 : 0;
+    const secondNextRound = createColorChallengeRound(
+      {
+        palette: secondRound.palette,
+        refreshAssignedColorEachIteration:
+          secondRound.refreshAssignedColorEachIteration,
+        assignedColorId: secondRound.assignedColorId,
+        minIntervalMs: secondRound.minIntervalMs,
+        maxIntervalMs: secondRound.maxIntervalMs,
+      },
+      new Date().toISOString()
+    );
     const wrongStatePromise = waitForEvent<{
       config: {
         colorChallenge: {
           score: number;
-          lastResult: { reason: string; scoreDelta: number };
+          iterationId: string;
+          lastResult: {
+            reason: string;
+            scoreDelta: number;
+            submissionId: string;
+            iterationId: string;
+          };
         };
       };
     }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
@@ -2613,9 +2668,12 @@ describe("controller HTTP API", () => {
         command: "submit_color_challenge_choice",
         targetId: "color-a",
         payload: {
+          roundId: secondRound.iterationId,
+          submissionId: "submit-2",
           choiceIndex: wrongChoiceIndex,
           colorId: secondRound.choices[wrongChoiceIndex].colorId,
           pressedAt: new Date().toISOString(),
+          nextRound: secondNextRound,
         },
       }),
     });
@@ -2624,9 +2682,14 @@ describe("controller HTTP API", () => {
     const wrongState = await wrongStatePromise;
     expect(wrongState.config.colorChallenge.lastResult).toMatchObject({
       reason: "wrong",
+      submissionId: "submit-2",
+      iterationId: secondRound.iterationId,
     });
     expect(wrongState.config.colorChallenge.lastResult.scoreDelta).toBeLessThan(
       0
+    );
+    expect(wrongState.config.colorChallenge.iterationId).toBe(
+      secondNextRound.iterationId
     );
 
     const resetStatePromise = waitForEvent<{

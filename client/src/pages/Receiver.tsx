@@ -1,5 +1,4 @@
 import {
-  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -29,13 +28,18 @@ import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
 import {
+  assignColorChallengeRound,
   clampNormalizedCoordinate,
   calculateTrackCost,
   calculateColorChallengeGreenness,
+  createColorChallengeRound,
   createDefaultReceiverConfig,
+  createGeneratedId,
+  evaluateColorChallengeRound,
   evaluateTimingPress,
   type ColorChallengeConfig,
   type EconomyConfig,
+  hasValidColorChallengeRound,
   type MapConfig,
   type PulseEvent,
   type TimingInteractionValue,
@@ -231,12 +235,17 @@ export default function Receiver() {
     voteId: string;
     selectedOptionId: string;
   } | null>(null);
+  const [optimisticColorChallenge, setOptimisticColorChallenge] =
+    useState<ColorChallengeConfig | null>(null);
   const [activeVolumeTrackId, setActiveVolumeTrackId] = useState<string | null>(
     null
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [lastTimingResult, setLastTimingResult] =
     useState<ReceiverTimingResult | null>(null);
+  const latestColorChallengeSubmissionIdRef = useRef<string | null>(null);
+  const colorChallengeResyncTimerRef = useRef<number | null>(null);
+  const resolvedColorChallengeRoundIdRef = useRef<string | null>(null);
 
   const config = useMemo(
     () => receiverState?.config ?? createDefaultReceiverConfig(),
@@ -246,7 +255,7 @@ export default function Receiver() {
     () => resolveEconomyDisplay(config.economy, nowMs),
     [config.economy, nowMs]
   );
-  const colorChallenge = config.colorChallenge;
+  const colorChallenge = optimisticColorChallenge ?? config.colorChallenge;
   const colorChallengeProgress = useMemo(
     () => resolveColorChallengeProgress(colorChallenge, nowMs),
     [colorChallenge, nowMs]
@@ -373,6 +382,44 @@ export default function Receiver() {
   }, [receiverState?.configExpiresAt, requestReceiverState]);
 
   useEffect(() => {
+    const latestSubmissionId = latestColorChallengeSubmissionIdRef.current;
+    if (!optimisticColorChallenge || !latestSubmissionId) {
+      return;
+    }
+
+    const serverChallenge = config.colorChallenge;
+    const acknowledged =
+      serverChallenge.lastResult?.submissionId === latestSubmissionId ||
+      (serverChallenge.iterationId !== null &&
+        serverChallenge.iterationId === optimisticColorChallenge.iterationId &&
+        Math.abs(serverChallenge.score - optimisticColorChallenge.score) < 0.001);
+    if (!acknowledged) {
+      return;
+    }
+
+    latestColorChallengeSubmissionIdRef.current = null;
+    if (colorChallengeResyncTimerRef.current !== null) {
+      window.clearTimeout(colorChallengeResyncTimerRef.current);
+      colorChallengeResyncTimerRef.current = null;
+    }
+    setOptimisticColorChallenge(null);
+  }, [config.colorChallenge, optimisticColorChallenge]);
+
+  useEffect(() => {
+    if (connected) {
+      return;
+    }
+
+    latestColorChallengeSubmissionIdRef.current = null;
+    resolvedColorChallengeRoundIdRef.current = null;
+    if (colorChallengeResyncTimerRef.current !== null) {
+      window.clearTimeout(colorChallengeResyncTimerRef.current);
+      colorChallengeResyncTimerRef.current = null;
+    }
+    setOptimisticColorChallenge(null);
+  }, [connected, receiverId]);
+
+  useEffect(() => {
     if (!config.textDisplay.text) {
       return;
     }
@@ -395,9 +442,7 @@ export default function Receiver() {
     let frameId = 0;
 
     const tick = () => {
-      startTransition(() => {
-        setNowMs(Date.now());
-      });
+      setNowMs(Date.now());
       frameId = window.requestAnimationFrame(tick);
     };
 
@@ -412,6 +457,9 @@ export default function Receiver() {
 
   useEffect(() => {
     return () => {
+      if (colorChallengeResyncTimerRef.current !== null) {
+        window.clearTimeout(colorChallengeResyncTimerRef.current);
+      }
       audioMapRef.current.forEach(audio => {
         audio.pause();
       });
@@ -616,6 +664,119 @@ export default function Receiver() {
     pulseEvent,
   ]);
 
+  const resolveColorChallengeLocally = useCallback(
+    (choiceIndex: number | null) => {
+      if (!connected) {
+        return false;
+      }
+
+      const activeChallenge = optimisticColorChallenge ?? config.colorChallenge;
+      if (
+        !activeChallenge.visible ||
+        !activeChallenge.enabled ||
+        activeChallenge.gameOver ||
+        !hasValidColorChallengeRound(activeChallenge) ||
+        resolvedColorChallengeRoundIdRef.current === activeChallenge.iterationId
+      ) {
+        return false;
+      }
+
+      const resolvedAtMs = Date.now();
+      const evaluation = evaluateColorChallengeRound({
+        challenge: activeChallenge,
+        choiceIndex,
+        resolvedAtMs,
+      });
+      if (!evaluation) {
+        return false;
+      }
+
+      const resolvedAt = new Date(resolvedAtMs).toISOString();
+      const submissionId = createGeneratedId("color-submit");
+      const nextScore = Math.max(0, activeChallenge.score + evaluation.scoreDelta);
+      const gameOver = nextScore <= 0;
+      const nextChallenge: ColorChallengeConfig = {
+        ...activeChallenge,
+        score: nextScore,
+        gameOver,
+        lastResult: {
+          ...evaluation,
+          score: nextScore,
+          gameOver,
+          resolvedAt,
+          submissionId,
+        },
+      };
+      const nextRound = gameOver
+        ? null
+        : createColorChallengeRound(activeChallenge, resolvedAt);
+
+      if (nextRound) {
+        assignColorChallengeRound(nextChallenge, nextRound);
+      }
+
+      resolvedColorChallengeRoundIdRef.current = activeChallenge.iterationId;
+      latestColorChallengeSubmissionIdRef.current = submissionId;
+      if (colorChallengeResyncTimerRef.current !== null) {
+        window.clearTimeout(colorChallengeResyncTimerRef.current);
+      }
+      colorChallengeResyncTimerRef.current = window.setTimeout(() => {
+        if (latestColorChallengeSubmissionIdRef.current !== submissionId) {
+          return;
+        }
+
+        latestColorChallengeSubmissionIdRef.current = null;
+        resolvedColorChallengeRoundIdRef.current = null;
+        colorChallengeResyncTimerRef.current = null;
+        setOptimisticColorChallenge(null);
+        requestReceiverState();
+      }, 5000);
+
+      setOptimisticColorChallenge(nextChallenge);
+      sendCommand({
+        command: "submit_color_challenge_choice",
+        targetId: receiverId,
+        payload: {
+          roundId: activeChallenge.iterationId ?? undefined,
+          submissionId,
+          choiceIndex,
+          colorId: evaluation.colorId ?? undefined,
+          pressedAt: resolvedAt,
+          nextRound,
+        },
+        timestamp: resolvedAt,
+      });
+      postDiscreteInteraction({
+        action:
+          evaluation.reason === "miss"
+            ? "submitColorChallengeMiss"
+            : "submitColorChallengeChoice",
+        element: "receiver:color_challenge_choice",
+        value: {
+          choiceIndex: evaluation.choiceIndex,
+          colorId: evaluation.colorId,
+          reason: evaluation.reason,
+          t: evaluation.t,
+          greenness: evaluation.greenness,
+          scoreDelta: evaluation.scoreDelta,
+          submissionId,
+          nextIterationId: nextRound?.iterationId ?? null,
+        },
+      });
+
+      return true;
+    },
+    [
+      config.colorChallenge,
+      connected,
+      optimisticColorChallenge,
+      postDiscreteInteraction,
+      receiverId,
+      requestReceiverState,
+      sendCommand,
+    ]
+  );
+
   const handleColorChallengeChoice = useCallback(
     (choiceIndex: number) => {
       const choice = colorChallenge.choices[choiceIndex];
@@ -628,37 +789,31 @@ export default function Receiver() {
         return;
       }
 
-      const pressedAt = new Date().toISOString();
-      sendCommand({
-        command: "submit_color_challenge_choice",
-        targetId: receiverId,
-        payload: {
-          choiceIndex,
-          colorId: choice.colorId,
-          pressedAt,
-        },
-        timestamp: pressedAt,
-      });
-      postDiscreteInteraction({
-        action: "submitColorChallengeChoice",
-        element: "receiver:color_challenge_choice",
-        value: {
-          choiceIndex,
-          colorId: choice.colorId,
-          t: colorChallengeProgress.t,
-          greenness: colorChallengeProgress.greenness,
-        },
-      });
+      resolveColorChallengeLocally(choiceIndex);
     },
-    [
-      colorChallenge,
-      colorChallengeProgress.greenness,
-      colorChallengeProgress.t,
-      postDiscreteInteraction,
-      receiverId,
-      sendCommand,
-    ]
+    [colorChallenge, resolveColorChallengeLocally]
   );
+
+  useEffect(() => {
+    if (
+      !connected ||
+      !colorChallenge.visible ||
+      !colorChallenge.enabled ||
+      colorChallenge.gameOver ||
+      !hasValidColorChallengeRound(colorChallenge) ||
+      colorChallengeProgress.t < 1 ||
+      resolvedColorChallengeRoundIdRef.current === colorChallenge.iterationId
+    ) {
+      return;
+    }
+
+    resolveColorChallengeLocally(null);
+  }, [
+    colorChallenge,
+    colorChallengeProgress.t,
+    connected,
+    resolveColorChallengeLocally,
+  ]);
 
   return (
     <div className="dark min-h-screen bg-zinc-950 text-zinc-50">
@@ -907,7 +1062,7 @@ export default function Receiver() {
                     <div className="relative h-8 overflow-hidden rounded-full bg-muted">
                       <div className="absolute inset-0 bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_22%,#22c55e_50%,#f59e0b_78%,#ef4444_100%)]" />
                       <div
-                        className="absolute inset-y-0 right-0 bg-background/85 transition-[width] duration-75"
+                        className="absolute inset-y-0 right-0 bg-background/85"
                         style={{
                           width: `${Math.max(
                             0,
@@ -917,7 +1072,7 @@ export default function Receiver() {
                       />
                       <div className="absolute inset-y-[-6px] left-1/2 w-1 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.7),0_0_16px_rgba(255,255,255,0.45)]" />
                       <div
-                        className="absolute inset-y-[-2px] w-4 -translate-x-1/2 rounded-full border border-background/70 bg-background shadow-[0_0_18px_rgba(255,255,255,0.35)] transition-[left] duration-75"
+                        className="absolute inset-y-[-2px] w-4 -translate-x-1/2 rounded-full border border-background/70 bg-background shadow-[0_0_18px_rgba(255,255,255,0.35)]"
                         style={{
                           left: `${colorChallengeProgress.t * 100}%`,
                         }}
@@ -952,6 +1107,7 @@ export default function Receiver() {
                             color: "#0a0a0a",
                           }}
                           disabled={
+                            !connected ||
                             !colorChallenge.enabled ||
                             colorChallenge.choices.length !== 2
                           }

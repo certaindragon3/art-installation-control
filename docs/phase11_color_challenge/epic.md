@@ -22,8 +22,8 @@
 ## 目标
 
 1. 将 `ColorHitGame.cs` 的 score / color choice / timing reward 迁移为 Web 版本。
-2. Server 权威生成每轮 choices、正确答案、score 变化和 game over。
-3. Receiver 只负责渲染两色按钮、移动 pointer，并提交点击时间。
+2. Receiver 本地立即结算每轮并立即切到下一轮，避免把网络 RTT 暴露给玩家。
+3. Server 负责 round / score / game over 的校验、追认、导出和对 controller / Unity 的状态广播。
 4. Controller 可开启、关闭、重置或配置 Color Challenge。
 5. Score 结果可被 Unity / external controller 观察或导出。
 
@@ -59,11 +59,12 @@ interface ColorChallengeConfig {
 ### 11.2 Server Gameplay
 
 - Receiver 注册后可获得初始 score。
-- Server 为每轮选择两个不同颜色。
-- 两个 choices 中必须包含 assigned color。
-- Server 记录 `iterationStartedAt` 和 `iterationDurationMs`。
-- Receiver 点击时提交 choice 和 client timestamp。
-- Server 计算 greenness：
+- Receiver 本地生成每轮 two-choice round，并带 `roundId` / `submissionId` / `nextRound` 提交。
+- Server 校验当前 round、计算 score 变化、记录 export event，并把最新状态广播回 controller / receiver。
+- 若 payload 缺少 receiver-led 字段，server 仍保留 legacy server-generated round 作为兼容 fallback。
+- 每轮 choices 中必须包含 assigned color。
+- `iterationStartedAt` 和 `iterationDurationMs` 继续作为 round 时间基准。
+- Score 计算公式保持不变：
 
 ```typescript
 const t = clamp01((pressedAt - iterationStartedAt) / iterationDurationMs);

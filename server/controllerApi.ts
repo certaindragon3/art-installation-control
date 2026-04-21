@@ -441,11 +441,18 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
       };
     }
     case "submit_color_challenge_choice": {
-      if (
-        !isRecord(body.payload) ||
-        typeof body.payload.choiceIndex !== "number" ||
-        !Number.isFinite(body.payload.choiceIndex)
-      ) {
+      if (!isRecord(body.payload)) {
+        return null;
+      }
+
+      const choiceIndex =
+        body.payload.choiceIndex === null
+          ? null
+          : typeof body.payload.choiceIndex === "number" &&
+              Number.isFinite(body.payload.choiceIndex)
+            ? body.payload.choiceIndex
+            : undefined;
+      if (choiceIndex === undefined) {
         return null;
       }
 
@@ -453,7 +460,15 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
         command: "submit_color_challenge_choice",
         targetId: body.targetId.trim(),
         payload: {
-          choiceIndex: body.payload.choiceIndex,
+          roundId:
+            typeof body.payload.roundId === "string"
+              ? body.payload.roundId
+              : undefined,
+          submissionId:
+            typeof body.payload.submissionId === "string"
+              ? body.payload.submissionId
+              : undefined,
+          choiceIndex,
           colorId:
             typeof body.payload.colorId === "string"
               ? body.payload.colorId
@@ -467,6 +482,49 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
             Number.isFinite(body.payload.clientTimestamp)
               ? body.payload.clientTimestamp
               : undefined,
+          nextRound: isRecord(body.payload.nextRound)
+            ? {
+                iterationId:
+                  typeof body.payload.nextRound.iterationId === "string"
+                    ? body.payload.nextRound.iterationId
+                    : "",
+                assignedColorId:
+                  typeof body.payload.nextRound.assignedColorId === "string"
+                    ? body.payload.nextRound.assignedColorId
+                    : "",
+                choices: Array.isArray(body.payload.nextRound.choices)
+                  ? body.payload.nextRound.choices.flatMap(choice =>
+                      isRecord(choice) &&
+                      typeof choice.colorId === "string" &&
+                      typeof choice.label === "string" &&
+                      typeof choice.color === "string"
+                        ? [
+                            {
+                              colorId: choice.colorId,
+                              label: choice.label,
+                              color: choice.color,
+                            },
+                          ]
+                        : []
+                    )
+                  : [],
+                correctChoiceIndex:
+                  typeof body.payload.nextRound.correctChoiceIndex === "number" &&
+                  Number.isFinite(body.payload.nextRound.correctChoiceIndex)
+                    ? body.payload.nextRound.correctChoiceIndex
+                    : -1,
+                iterationStartedAt:
+                  typeof body.payload.nextRound.iterationStartedAt === "string"
+                    ? body.payload.nextRound.iterationStartedAt
+                    : "",
+                iterationDurationMs:
+                  typeof body.payload.nextRound.iterationDurationMs ===
+                    "number" &&
+                  Number.isFinite(body.payload.nextRound.iterationDurationMs)
+                    ? body.payload.nextRound.iterationDurationMs
+                    : 0,
+              }
+            : undefined,
         },
         timestamp,
       };

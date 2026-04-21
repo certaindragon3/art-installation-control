@@ -512,6 +512,25 @@ export interface ColorChallengeExport {
   events: ColorChallengeEventExport[];
 }
 
+export interface ScoreboardReceiverExport {
+  receiverId: string;
+  label: string;
+  connected: boolean;
+  economyRemainingSeconds: number;
+  economyEnabled: boolean;
+  economyGameOver: boolean;
+  manualScoreValue: number;
+  scoreSystemScore: number;
+  scoreSystemEnabled: boolean;
+  scoreSystemGameOver: boolean;
+}
+
+export interface ScoreboardExport {
+  generatedAt: string;
+  totalReceivers: number;
+  receivers: ScoreboardReceiverExport[];
+}
+
 // ─── Unity Interaction Events ────────────────────────────────────────
 export interface UnityInteractionEvent {
   sourceRole: "controller" | "receiver";

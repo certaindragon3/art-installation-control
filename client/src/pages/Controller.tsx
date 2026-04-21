@@ -54,6 +54,7 @@ import type {
   ColorChallengeConfig,
   EconomyConfig,
   ReceiverState,
+  ScoreboardExport,
   ScoreConfig,
   TimingConfig,
   TrackState,
@@ -118,6 +119,62 @@ type NumericInputProps = Omit<
   onValueChange: (value: number) => void;
   formatValue?: (value: number) => string;
 };
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  window.URL.revokeObjectURL(url);
+}
+
+function escapeCsvCell(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const text = String(value);
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+function buildScoreboardCsv(scoreboard: ScoreboardExport) {
+  const header = [
+    "receiverId",
+    "label",
+    "connected",
+    "economyRemainingSeconds",
+    "economyEnabled",
+    "economyGameOver",
+    "manualScoreValue",
+    "scoreSystemScore",
+    "scoreSystemEnabled",
+    "scoreSystemGameOver",
+  ];
+
+  const rows = scoreboard.receivers.map(receiver =>
+    [
+      receiver.receiverId,
+      receiver.label,
+      receiver.connected,
+      receiver.economyRemainingSeconds,
+      receiver.economyEnabled,
+      receiver.economyGameOver,
+      receiver.manualScoreValue,
+      receiver.scoreSystemScore,
+      receiver.scoreSystemEnabled,
+      receiver.scoreSystemGameOver,
+    ]
+      .map(escapeCsvCell)
+      .join(",")
+  );
+
+  return [header.join(","), ...rows].join("\n");
+}
 
 function NumericInput({
   value,
@@ -284,6 +341,7 @@ export default function Controller() {
   const [exportingVotes, setExportingVotes] = useState(false);
   const [exportingTiming, setExportingTiming] = useState(false);
   const [exportingColorChallenge, setExportingColorChallenge] = useState(false);
+  const [exportingScoreboard, setExportingScoreboard] = useState(false);
   const [colorChallengePaletteInput, setColorChallengePaletteInput] = useState(
     "red,Red,#ef4444\ngreen,Green,#22c55e\nblue,Blue,#3b82f6\nyellow,Yellow,#eab308"
   );
@@ -1029,15 +1087,12 @@ export default function Controller() {
       }
 
       const body = await response.json();
-      const blob = new Blob([JSON.stringify(body, null, 2)], {
-        type: "application/json",
-      });
-      const url = window.URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `phase4-votes-${new Date().toISOString()}.json`;
-      anchor.click();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(
+        new Blob([JSON.stringify(body, null, 2)], {
+          type: "application/json",
+        }),
+        `phase4-votes-${new Date().toISOString()}.json`
+      );
 
       postDiscreteInteraction({
         action: "exportVotes",
@@ -1060,15 +1115,12 @@ export default function Controller() {
       }
 
       const body = await response.json();
-      const blob = new Blob([JSON.stringify(body, null, 2)], {
-        type: "application/json",
-      });
-      const url = window.URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `phase6-timing-${new Date().toISOString()}.json`;
-      anchor.click();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(
+        new Blob([JSON.stringify(body, null, 2)], {
+          type: "application/json",
+        }),
+        `phase6-timing-${new Date().toISOString()}.json`
+      );
 
       postDiscreteInteraction({
         action: "exportTiming",
@@ -1129,15 +1181,12 @@ export default function Controller() {
       }
 
       const body = await response.json();
-      const blob = new Blob([JSON.stringify(body, null, 2)], {
-        type: "application/json",
-      });
-      const url = window.URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `phase11-color-challenge-${new Date().toISOString()}.json`;
-      anchor.click();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(
+        new Blob([JSON.stringify(body, null, 2)], {
+          type: "application/json",
+        }),
+        `phase11-color-challenge-${new Date().toISOString()}.json`
+      );
 
       postDiscreteInteraction({
         action: "exportColorChallenge",
@@ -1147,6 +1196,37 @@ export default function Controller() {
       });
     } finally {
       setExportingColorChallenge(false);
+    }
+  }, [postDiscreteInteraction]);
+
+  const handleScoreboardExport = useCallback(async () => {
+    setExportingScoreboard(true);
+
+    try {
+      const response = await fetch("/api/controller/scoreboard/export");
+      if (!response.ok) {
+        throw new Error(`Failed to export scoreboard: ${response.status}`);
+      }
+
+      const body = (await response.json()) as {
+        ok: true;
+        scoreboard: ScoreboardExport;
+      };
+      downloadBlob(
+        new Blob([buildScoreboardCsv(body.scoreboard)], {
+          type: "text/csv;charset=utf-8",
+        }),
+        `scoreboard-${new Date().toISOString()}.csv`
+      );
+
+      postDiscreteInteraction({
+        action: "exportScoreboard",
+        element: "scoreboard:download_csv",
+        value: body.scoreboard.totalReceivers,
+        receiverId: null,
+      });
+    } finally {
+      setExportingScoreboard(false);
     }
   }, [postDiscreteInteraction]);
 
@@ -1254,9 +1334,10 @@ export default function Controller() {
                 <CardDescription>
                   Reset clears loop, groups, volume state, text, and all other
                   runtime modules, including pulse tempo and marker state.
+                  Score download exports the current receiver scoreboard.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 <Button
                   className="w-full justify-start"
                   variant="destructive"
@@ -1265,6 +1346,21 @@ export default function Controller() {
                   <RotateCcw data-icon="inline-start" />
                   Reset All State
                 </Button>
+                <Button
+                  className="w-full justify-start"
+                  variant="outline"
+                  onClick={handleScoreboardExport}
+                  disabled={exportingScoreboard || receivers.length === 0}
+                >
+                  <Download data-icon="inline-start" />
+                  {exportingScoreboard
+                    ? "Downloading Score CSV..."
+                    : "Download Score CSV"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Exports current economy remaining seconds, manual score, and
+                  score-system values for every receiver in one CSV.
+                </p>
               </CardContent>
             </Card>
           </section>

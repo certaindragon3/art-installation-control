@@ -506,6 +506,32 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
+Download the current score snapshot for all receivers:
+
+```bash
+curl "$BASE_URL/api/controller/scoreboard/export"
+```
+
+Response excerpt:
+
+```json
+{
+  "ok": true,
+  "scoreboard": {
+    "generatedAt": "2026-04-21T02:33:40.000Z",
+    "totalReceivers": 2,
+    "receivers": [
+      {
+        "receiverId": "screen-a",
+        "economyRemainingSeconds": 18.5,
+        "manualScoreValue": 7,
+        "scoreSystemScore": 2.75
+      }
+    ]
+  }
+}
+```
+
 ### Operator Manual Playback
 
 Manual play / pause remains available for operator debugging and emergency

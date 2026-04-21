@@ -38,7 +38,7 @@ http://127.0.0.1:3100
 1. Call `GET /api/controller/receivers` to discover the current final `receiverId` list.
 2. Send control actions through `POST /api/controller/command`.
 3. Read back the updated authoritative state from `GET /api/controller/receivers`.
-4. Use export endpoints only when Unity needs JSON snapshots of vote, timing, or color challenge logs.
+4. Use export endpoints when Unity needs JSON snapshots of the current scoreboard or any vote, timing, or color challenge logs.
 5. Use `POST /api/unity/register` only if Unity wants the Socket.IO metadata for listening to `interaction_event`.
 
 ## HTTP Endpoints
@@ -180,6 +180,10 @@ Returns all timing attempts currently kept in memory.
 ### `GET /api/controller/color-challenge/export`
 
 Returns all color challenge result events currently kept in memory.
+
+### `GET /api/controller/scoreboard/export`
+
+Returns the current per-receiver score snapshot, including economy remaining seconds and score-system values.
 
 ### `POST /api/unity/register`
 
@@ -908,6 +912,45 @@ Behavior:
 - Sets `lastResult.reason` to `reset`.
 
 ## Export Endpoints
+
+### Scoreboard Export
+
+`GET /api/controller/scoreboard/export`
+
+This is the current score snapshot endpoint. It is intended for the professor / Unity side when a spreadsheet-style record of the latest results is needed instead of raw event logs. The controller UI `Download Score CSV` button uses this endpoint and converts the JSON into CSV.
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "scoreboard": {
+    "generatedAt": "2026-04-21T02:33:40.000Z",
+    "totalReceivers": 2,
+    "receivers": [
+      {
+        "receiverId": "screen-a",
+        "label": "Screen A",
+        "connected": true,
+        "economyRemainingSeconds": 18.5,
+        "economyEnabled": true,
+        "economyGameOver": false,
+        "manualScoreValue": 7,
+        "scoreSystemScore": 2.75,
+        "scoreSystemEnabled": true,
+        "scoreSystemGameOver": false
+      }
+    ]
+  }
+}
+```
+
+Field notes:
+
+- `economyRemainingSeconds` is the current live `economy.currencySeconds` snapshot at export time.
+- `manualScoreValue` is the Phase 5 per-player score card value.
+- `scoreSystemScore` is the Phase 11 score-system value from the Color Challenge module.
+- `connected` helps distinguish active receivers from disconnected snapshots that are still retained until `clear-offline`.
 
 ### Vote Export
 

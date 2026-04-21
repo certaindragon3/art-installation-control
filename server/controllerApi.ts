@@ -16,6 +16,7 @@ import {
   getColorChallengeExport,
   getConfigSnapshot,
   getReceiverList,
+  getScoreboardExport,
   getTimingExport,
   getVoteExports,
 } from "./wsServer";
@@ -617,6 +618,13 @@ export function registerControllerApi(app: Express) {
     res.status(200).json({
       ok: true,
       colorChallenge: getColorChallengeExport(),
+    });
+  });
+
+  app.get("/api/controller/scoreboard/export", (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      scoreboard: getScoreboardExport(),
     });
   });
 

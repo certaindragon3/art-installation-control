@@ -36,6 +36,8 @@ import {
   type RemoveTrackPayload,
   type RequestTrackPlayPayload,
   type RequestTrackStopPayload,
+  type ScoreboardExport,
+  type ScoreboardReceiverExport,
   type SetGroupStatePayload,
   type SetModuleStatePayload,
   type SetTrackStatePayload,
@@ -2336,6 +2338,29 @@ export function getColorChallengeExport(): ColorChallengeExport {
     misses: events.filter(event => event.reason === "miss").length,
     gameOvers: events.filter(event => event.gameOver).length,
     events,
+  };
+}
+
+export function getScoreboardExport(): ScoreboardExport {
+  const receivers: ScoreboardReceiverExport[] = getReceiverList()
+    .map(receiver => ({
+      receiverId: receiver.receiverId,
+      label: receiver.label,
+      connected: receiver.connected,
+      economyRemainingSeconds: receiver.config.economy.currencySeconds,
+      economyEnabled: receiver.config.economy.enabled,
+      economyGameOver: receiver.config.economy.gameOver,
+      manualScoreValue: receiver.config.score.value,
+      scoreSystemScore: receiver.config.colorChallenge.score,
+      scoreSystemEnabled: receiver.config.colorChallenge.enabled,
+      scoreSystemGameOver: receiver.config.colorChallenge.gameOver,
+    }))
+    .sort((left, right) => left.receiverId.localeCompare(right.receiverId));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalReceivers: receivers.length,
+    receivers,
   };
 }
 

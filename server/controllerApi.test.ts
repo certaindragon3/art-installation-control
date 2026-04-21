@@ -2373,6 +2373,135 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("exports a live scoreboard with economy remaining seconds and score values", async () => {
+    const receiverA = await connectSocket(baseUrl);
+    const receiverB = await connectSocket(baseUrl);
+    sockets.push(receiverA, receiverB);
+
+    const receiverAStatePromise = waitForEvent(
+      receiverA,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverA.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Screen A",
+    });
+    await receiverAStatePromise;
+
+    const receiverBStatePromise = waitForEvent(
+      receiverB,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiverB.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-b",
+      label: "Screen B",
+    });
+    await receiverBStatePromise;
+
+    const jsonHeaders = { "content-type": "application/json" };
+
+    const economyResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "economy",
+          patch: {
+            enabled: true,
+            currencySeconds: 18.5,
+            earnRatePerSecond: 0,
+            inflationGrowthPerSecond: 0,
+          },
+        },
+      }),
+    });
+    expect(economyResponse.status).toBe(200);
+
+    const scoreResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        command: "set_module_state",
+        targetId: "screen-a",
+        payload: {
+          module: "score",
+          patch: {
+            value: 7,
+          },
+        },
+      }),
+    });
+    expect(scoreResponse.status).toBe(200);
+
+    const colorChallengeResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          command: "set_module_state",
+          targetId: "screen-a",
+          payload: {
+            module: "colorChallenge",
+            patch: {
+              enabled: true,
+              score: 2.75,
+            },
+          },
+        }),
+      }
+    );
+    expect(colorChallengeResponse.status).toBe(200);
+
+    const exportResponse = await fetch(
+      `${baseUrl}/api/controller/scoreboard/export`
+    );
+    const exportBody = await exportResponse.json();
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportBody).toMatchObject({
+      ok: true,
+      scoreboard: {
+        generatedAt: expect.any(String),
+        totalReceivers: 2,
+      },
+    });
+
+    const receiverARow = exportBody.scoreboard.receivers.find(
+      (receiver: { receiverId: string }) => receiver.receiverId === "screen-a"
+    );
+    const receiverBRow = exportBody.scoreboard.receivers.find(
+      (receiver: { receiverId: string }) => receiver.receiverId === "screen-b"
+    );
+
+    expect(receiverARow).toMatchObject({
+      receiverId: "screen-a",
+      label: "Screen A",
+      connected: true,
+      economyRemainingSeconds: 18.5,
+      economyEnabled: true,
+      economyGameOver: false,
+      manualScoreValue: 7,
+      scoreSystemScore: 2.75,
+      scoreSystemEnabled: true,
+      scoreSystemGameOver: false,
+    });
+    expect(receiverBRow).toMatchObject({
+      receiverId: "screen-b",
+      label: "Screen B",
+      connected: true,
+      economyRemainingSeconds: 30,
+      economyEnabled: false,
+      economyGameOver: false,
+      manualScoreValue: 0,
+      scoreSystemScore: 1,
+      scoreSystemEnabled: false,
+      scoreSystemGameOver: false,
+    });
+  });
+
   it("blocks revote when disabled and vote_reset_all clears current selections", async () => {
     const receiverA = await connectSocket(baseUrl);
     const receiverB = await connectSocket(baseUrl);

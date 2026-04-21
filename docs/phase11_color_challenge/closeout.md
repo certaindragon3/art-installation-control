@@ -1,24 +1,22 @@
 # Phase 11 Closeout: Color Challenge / Score Game
 
-Date: 2026-04-20
+Date: 2026-04-21
 
-Local URL tested: `http://127.0.0.1:3001`
+Production URL tested: `https://artinstallation.certaindragon3.work`
 
 Corresponding feedback: `docs/phase11_color_challenge/source/ColorHitGame.cs`
 
-Depends on: Phase 10 final-touch economy is already delivered. Phase 11 remains separate from the Sound Economy game over state.
+Depends on: Phase 10 receiver-led sound economy is already delivered. Phase 11 remains an independent scoring game and does not merge its `gameOver` state into the economy module.
 
 ## Delivered
 
-- Implemented the professor `ColorHitGame.cs` flow as a Web / Socket.IO module.
-- Added independent `ReceiverState.config.colorChallenge` state for palette, assigned color, two-choice rounds, timing duration, scoring parameters, and game over.
-- Receiver pages now run the round loop locally so button press and next-round transition no longer wait on network RTT.
-- Server validates or falls back each submitted round and guarantees exactly two distinct choices with one matching `assignedColorId`.
-- Receiver pages render assigned color, score, red-green-red timing bar, moving pointer, and two color buttons.
-- Receiver choice submissions use `submit_color_challenge_choice` with `roundId` / `submissionId` / optional `nextRound` for receiver-led reconciliation.
-- Server applies correct reward, wrong-choice penalty, timeout miss penalty, next-round reconciliation, and score game over.
-- Controller can show/hide, enable/disable, reset/revive, tune timing and scoring, edit palette, and export results.
-- Color Challenge export is available for professor / Unity review.
+- Implemented the professor `ColorHitGame.cs` flow as a Web / Socket.IO gameplay module.
+- Added independent `ReceiverState.config.colorChallenge` state for palette, assigned color, round timing, scoring, latest result, and game over.
+- Receiver pages now resolve rounds locally so the button press and next-round transition do not wait on network RTT.
+- Server validates each submitted round result, applies the authoritative score delta, records export events, and broadcasts updated receiver snapshots back to controller and receiver clients.
+- Color Challenge stays separate from Phase 10 economy. Economy playback and Phase 5 manual score remain intact.
+- Controller UI can show or hide the game, enable or disable it, tune timing and penalties, edit the palette, reset or revive a receiver, and export results.
+- Professor-facing plug-and-play command docs now include copyable Phase 11 payloads.
 
 ## Main Files
 
@@ -34,9 +32,22 @@ Depends on: Phase 10 final-touch economy is already delivered. Phase 11 remains 
 
 ## API / Protocol Changes
 
-### Receiver State Snapshot
+### Socket.IO / Unified Command Surface
 
-Every receiver snapshot now includes:
+No new top-level Socket.IO event names were added. Phase 11 reuses the existing unified command path:
+
+- Socket.IO controllers send `control_message`.
+- HTTP / Unity callers send `POST /api/controller/command`.
+
+New Phase 11 command names:
+
+- `set_module_state` with `payload.module: "colorChallenge"`
+- `submit_color_challenge_choice`
+- `color_challenge_reset`
+
+### Receiver Snapshot Change
+
+Every receiver snapshot now includes `config.colorChallenge`:
 
 ```typescript
 interface ColorChallengeConfig {
@@ -63,7 +74,7 @@ interface ColorChallengeConfig {
 }
 ```
 
-Default values:
+Default shape:
 
 ```json
 {
@@ -95,7 +106,7 @@ Default values:
 }
 ```
 
-This appears in:
+This snapshot appears in:
 
 - `GET /api/config`
 - `GET /api/controller/receivers`
@@ -112,7 +123,7 @@ POST /api/controller/command
 Content-Type: application/json
 ```
 
-Payload:
+Minimal payload:
 
 ```json
 {
@@ -140,14 +151,17 @@ Payload:
 Behavior:
 
 - `targetId: "*"` broadcasts the same patch to all current receivers.
-- `visible` and `enabled` together start a valid round. Receiver pages may then continue rounds locally and reconcile back through the server.
-- `minIntervalMs` and `maxIntervalMs` are milliseconds and are clamped to `250..600000`.
-- If `maxIntervalMs < minIntervalMs`, the server normalizes the interval bounds.
-- Penalty / reward numbers are clamped to non-negative values.
+- `visible: true` and `enabled: true` together start a valid round when the receiver is not in `gameOver`.
+- `minIntervalMs` and `maxIntervalMs` are milliseconds and clamp to the server range.
+- If `maxIntervalMs < minIntervalMs`, the server normalizes the pair into ascending order.
+- Numeric reward and penalty fields clamp to non-negative values.
 - `maxWrongPenalty` is normalized to be at least `minWrongPenalty`.
-- Palette updates require at least two unique colors.
+- `assignedColorId` can pin the target color to an existing palette entry. Sending `null` clears the pin.
+- `refreshAssignedColorEachIteration: false` keeps reusing the same assigned color until it is changed or cleared.
+- `palette` updates require at least two unique colors and start a new round when the game is active.
+- Sending `gameOver: false` revives the module if needed, but `color_challenge_reset` is the simpler operator path.
 
-### Set Palette
+Palette example:
 
 ```json
 {
@@ -167,11 +181,9 @@ Behavior:
 }
 ```
 
-Changing the palette starts a new round if the challenge is active. If the old `assignedColorId` no longer exists in the palette, the server chooses a new assigned color.
+### Submit A Choice
 
-### Submit Choice
-
-Receiver pages send this command automatically. External tools can use the same shape for testing.
+Receiver pages send this automatically. HTTP / Unity can use the same payload for testing or external orchestration.
 
 ```json
 {
@@ -182,7 +194,7 @@ Receiver pages send this command automatically. External tools can use the same 
     "submissionId": "color-submit-456",
     "choiceIndex": 0,
     "colorId": "green",
-    "pressedAt": "2026-04-20T13:30:00.000Z",
+    "pressedAt": "2026-04-21T02:10:40.000Z",
     "nextRound": {
       "iterationId": "color-round-124",
       "assignedColorId": "green",
@@ -191,7 +203,7 @@ Receiver pages send this command automatically. External tools can use the same 
         { "colorId": "red", "label": "Red", "color": "#ef4444" }
       ],
       "correctChoiceIndex": 0,
-      "iterationStartedAt": "2026-04-20T13:30:00.000Z",
+      "iterationStartedAt": "2026-04-21T02:10:40.000Z",
       "iterationDurationMs": 2400
     }
   }
@@ -200,30 +212,52 @@ Receiver pages send this command automatically. External tools can use the same 
 
 Rules:
 
-- `roundId` should match the receiver's current `iterationId` when using receiver-led gameplay.
-- `submissionId` is echoed back in `lastResult` and export events so receivers can reconcile optimistic UI.
-- `choiceIndex` may be `0`, `1`, or `null` for a receiver-led timeout miss.
+- `roundId` should match the receiver's active `iterationId` when receiver-led reconciliation is used.
+- `submissionId` is echoed back in `lastResult` and export events.
+- `choiceIndex` may be `0`, `1`, or `null` for a timeout miss.
 - `colorId` is optional, but when provided it must match the selected choice.
-- `pressedAt` is optional ISO time. If absent, the server uses receive time.
-- `nextRound` is optional. Receiver pages send it so the server can accept the locally generated next round instead of re-rolling one.
+- `pressedAt` is optional ISO time. `clientTimestamp` is also accepted as a numeric fallback.
 - Future timestamps are clamped to server receive time.
-- Receivers may only submit choices for their own final receiver ID.
-- Controller / Unity / HTTP may submit for any target for testing.
+- `nextRound` is optional. Receiver pages send it so the server can accept the locally prepared next round instead of generating a fresh one.
+- Receivers may only submit choices for their own final receiver ID through the socket path. HTTP / controller callers can target any receiver for testing.
 
-Scoring:
+Scoring formula:
 
 ```typescript
 const t = clamp01((pressedAt - iterationStartedAt) / iterationDurationMs);
 const greenness = 1 - Math.abs(2 * t - 1);
 ```
 
+Score behavior:
+
 - Correct choice: `score += maxReward * greenness`
 - Wrong choice: `score -= minWrongPenalty + (maxWrongPenalty - minWrongPenalty) * greenness`
-- Timeout with no press: `score -= missPenalty`
-- `score <= 0` sets `gameOver: true` and clamps `score` to `0`
-- If still alive, the receiver immediately starts the next round locally and the server reconciles to the submitted `nextRound` when valid
+- Timeout or late press: `score -= missPenalty`
+- `score <= 0` clamps to `0` and sets `gameOver: true`
+- If the receiver survives the round, a new round starts immediately
+
+Example result from production closeout verification:
+
+```json
+{
+  "reason": "correct",
+  "choiceIndex": 1,
+  "colorId": "green",
+  "assignedColorId": "green",
+  "correctChoiceIndex": 1,
+  "iterationId": "color-round-a1e9e806-7bbc-4fc8-80b0-e85d91c80592",
+  "t": 0.019733333333333332,
+  "greenness": 0.03946666666666665,
+  "scoreDelta": 0.11839999999999995,
+  "submissionId": "phase11closeout-submit-correct",
+  "score": 2.1184,
+  "gameOver": false
+}
+```
 
 ### Reset / Revive
+
+Use the dedicated reset command to recover after game over while preserving the current configuration:
 
 ```json
 {
@@ -233,9 +267,17 @@ const greenness = 1 - Math.abs(2 * t - 1);
 }
 ```
 
-Reset keeps current visibility, enabled state, palette, intervals, and scoring parameters, then sets `score = startingScore`, clears game over, and starts a new round if active.
+Behavior:
+
+- Keeps `visible`, `enabled`, palette, timing, reward, and penalty values.
+- Resets `score` back to `startingScore`.
+- Clears `gameOver`.
+- Writes a `lastResult` entry with `reason: "reset"`.
+- Starts a fresh round immediately if the challenge is visible and enabled.
 
 ### Export Results
+
+Phase 11 adds one direct export route:
 
 ```http
 GET /api/controller/color-challenge/export
@@ -247,43 +289,58 @@ Response shape:
 {
   "ok": true,
   "colorChallenge": {
-    "generatedAt": "2026-04-20T13:30:00.000Z",
-    "totalEvents": 3,
-    "correct": 1,
-    "wrong": 1,
-    "misses": 1,
-    "gameOvers": 1,
+    "generatedAt": "2026-04-21T02:11:12.293Z",
+    "totalEvents": 79,
+    "correct": 27,
+    "wrong": 2,
+    "misses": 50,
+    "gameOvers": 3,
     "events": []
   }
 }
 ```
 
-Each event includes receiver id, label, score delta, final score, game over flag, choices, assigned color, correct index, `t`, and `greenness`.
+Each exported event includes:
+
+- `receiverId`
+- `label`
+- `reason`
+- `scoreDelta`
+- `score`
+- `gameOver`
+- `submissionId`
+- `assignedColorId`
+- `correctChoiceIndex`
+- `choices`
+- `t`
+- `greenness`
+- `isoTimestamp`
 
 ## Unity / External Controller Guidance
 
-Recommended workflow:
+Recommended integration flow:
 
-1. Call `GET /api/controller/receivers`.
-2. Enable Color Challenge with `set_module_state` / `module: "colorChallenge"`.
-3. Let students use the receiver page buttons.
-4. Observe `ReceiverState.config.colorChallenge` through `/api/controller/receivers`, `/api/config`, or Socket.IO controller list updates.
-5. Export `GET /api/controller/color-challenge/export` after a run.
+1. Call `GET /api/controller/receivers` and choose the final `receiverId`.
+2. Enable the game with `set_module_state` and `module: "colorChallenge"`.
+3. Let students interact on `/receiver/:id`.
+4. Read live state from `/api/controller/receivers`, `/api/config`, or Socket.IO controller updates.
+5. Export cumulative results with `GET /api/controller/color-challenge/export`.
 6. Use `color_challenge_reset` to revive a receiver after game over.
 
-Do not directly drive DOM buttons from Unity. Use the HTTP controller API or Socket.IO unified command protocol.
+Do not drive DOM buttons from Unity. Use the HTTP controller bridge or the existing Socket.IO unified command path.
 
-## Compatibility
+## Compatibility / Migration
 
-- Existing Phase 5 `score` is unchanged and remains a manual display module.
-- Existing Phase 10 `economy` game over is unchanged.
-- Color Challenge has its own `gameOver` flag and does not stop sound playback.
+- Existing Phase 5 `score` remains a separate manual display module.
+- Existing Phase 10 `economy` remains unchanged.
+- Color Challenge has its own `gameOver` flag and does not stop economy playback.
 - `reset_all_state` clears Color Challenge back to defaults.
-- Existing legacy `audio_control`, `audio_playable`, `color_change`, and `text_message` messages are unchanged.
+- Legacy `audio_control`, `audio_playable`, `color_change`, and `text_message` remain unchanged.
+- Palette input accepts structured objects and also tolerates simple string entries internally, but professor-facing docs standardize on `{ colorId, label, color }`.
 
 ## Local Validation
 
-Commands run:
+Commands rerun on 2026-04-21:
 
 ```bash
 corepack pnpm check
@@ -299,61 +356,74 @@ Results:
 
 Build note:
 
-- Vite emitted the existing chunk-size warning for a `564.44 kB` JS bundle. The build completed successfully.
+- Vite emitted the existing large-chunk warning for `dist/public/assets/index-BmCboc2K.js` at `568.89 kB`.
+- The build still completed successfully and produced `dist/index.js`.
 
 ## Browser Smoke Test
 
 Tooling: `agent-browser`
 
-Environment: `http://127.0.0.1:3001`
+Environment: `https://artinstallation.certaindragon3.work`
 
-Date: 2026-04-20
+Date: 2026-04-21
 
-Setup:
+Receiver used: `phase11closeout`
 
-- Initial `corepack pnpm dev` on port `3000` failed because the port was already in use.
-- Smoke test server was started with `PORT=3001 corepack pnpm dev`.
+1. Opened `/receiver/phase11closeout`.
+   - Observed the receiver connect online on production.
+   - After enabling Phase 11 over HTTP, `agent-browser` confirmed receiver-page text for `Color Challenge`, `Greenness`, and `Score`.
+2. Enabled Color Challenge over `POST /api/controller/command` with a short `4s` interval.
+   - Observed the timeout path trigger naturally.
+   - Controller state later showed the receiver row as `Color 0.0 over`, confirming the `missPenalty` and `gameOver` path on production.
+3. Opened `/controller`.
+   - Observed the heading `Phase 11 Controller`.
+   - Observed the Phase 11 panel with visible and enabled switches, score and interval inputs, palette editor, `Reset / Revive`, and `Export JSON`.
+4. Reconfigured the same receiver over HTTP to `startingScore = 2`, `minIntervalMs = 30000`, and `maxIntervalMs = 30000`, then submitted a correct choice while the receiver page stayed open.
+   - Controller state updated to `Receiver phase11closeout ... Color 2.1`, confirming that the authoritative score increased on production.
+   - The selected receiver panel also reflected the updated values `Starting Score 2`, `Min Seconds 30`, and `Max Seconds 30`.
+5. Queried `GET /api/controller/color-challenge/export`.
+   - Confirmed cumulative export counts were present.
+   - Filtered by `receiverId == "phase11closeout"` and confirmed both a recent correct event and later miss events for the production smoke sequence.
 
-Steps:
-
-1. Opened `/receiver/phase11smoke`.
-   - Observed receiver online and rendering existing economy / track UI.
-2. Sent `set_module_state` over HTTP for `module: "colorChallenge"`.
-   - Observed API returned `ok: true`.
-   - Snapshot included Color Challenge with assigned color, score, red-green-red timing state, and game over after an intentional timeout.
-3. Sent `color_challenge_reset` with a longer `30000ms` interval.
-   - Observed new round with exactly two choices and one correct assigned color.
-4. Used `agent-browser eval` to click the correct color button on the receiver page.
-   - Observed receiver snapshot update from score `1` to `2.5`.
-   - Observed `lastResult: correct`, positive score delta, and a new active round.
-5. Opened `/controller` and selected `phase11smoke`.
-   - Observed the Phase 11 Controller heading.
-   - Observed Color Challenge controller panel with score, assigned color, round state, visible/enabled switches, timing/scoring inputs, palette editor, reset/revive, and export button.
-6. Queried `GET /api/controller/color-challenge/export`.
-   - Confirmed export counters included recorded correct and timeout events:
+Export excerpts from the production smoke:
 
 ```json
 {
-  "totalEvents": 3,
-  "correct": 1,
-  "wrong": 0,
-  "misses": 2,
-  "gameOvers": 2
+  "receiverId": "phase11closeout",
+  "reason": "correct",
+  "score": 2.1184,
+  "scoreDelta": 0.11839999999999995,
+  "gameOver": false,
+  "submissionId": "phase11closeout-submit-correct",
+  "isoTimestamp": "2026-04-21T02:10:40.000Z"
 }
 ```
 
-Notes:
+```json
+{
+  "receiverId": "phase11closeout",
+  "reason": "miss",
+  "score": 1.1183999999999998,
+  "scoreDelta": -1,
+  "gameOver": false,
+  "submissionId": null,
+  "isoTimestamp": "2026-04-21T02:11:10.000Z"
+}
+```
 
-- The controller snapshot showed the smoke receiver as offline after navigating the same browser tab away from `/receiver/phase11smoke` to `/controller`. This is expected for a single-tab smoke test; the receiver page socket disconnected when the tab navigated.
-- Audio autoplay was not part of this phase and was not tested.
+Browser-automation note:
 
-## Deployment Notes
+- The controller DOM is intentionally dense because it also exposes the full track matrix. For this closeout, `agent-browser` was used to verify visible production UI state, while state-changing actions were sent through the documented HTTP controller API for deterministic validation.
 
-- No Zeabur deployment was required for Phase 11 before local validation because this phase does not change Docker, production startup, static serving, `PORT`, reverse proxy behavior, or cross-device Socket.IO topology.
-- The feature still relies on in-memory Socket.IO state.
+## Deployment / Running Notes
+
+- Phase 11 is already deployed and was verified directly against the production Zeabur URL above.
+- The gameplay state is still stored in server memory.
 - Production must remain single-replica.
+- No extra Docker, `PORT`, static hosting, or health-check changes were required in this phase.
 
 ## Not Covered / Follow-Up
 
-- Not yet tested with many physical student devices at the same time.
-- Professor may still tune default palette colors and score values after seeing the receiver UI.
+- Multi-device classroom-scale manual playtesting is still pending.
+- The default palette and score numbers may still be tuned after professor review.
+- Export counters are cumulative since process start, so receiver-specific analysis should filter by `receiverId`.

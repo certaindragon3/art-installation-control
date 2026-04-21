@@ -1813,6 +1813,109 @@ describe("controller HTTP API", () => {
     );
   });
 
+  it("allows request_track_play when economy is disabled", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const initialStatePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "economy-disabled-a",
+      label: "Economy Disabled A",
+    });
+    await initialStatePromise;
+
+    const visibleTracksPromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const visibleTracksResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_visible_tracks",
+          targetId: "economy-disabled-a",
+          payload: {
+            trackIds: ["track_01"],
+          },
+        }),
+      }
+    );
+    expect(visibleTracksResponse.status).toBe(200);
+    await visibleTracksPromise;
+
+    const disabledEconomyPromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const disabledEconomyResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_module_state",
+          targetId: "economy-disabled-a",
+          payload: {
+            module: "economy",
+            patch: {
+              enabled: false,
+              currencySeconds: 0,
+              gameOver: true,
+              lastError: "insufficient_currency",
+            },
+          },
+        }),
+      }
+    );
+    expect(disabledEconomyResponse.status).toBe(200);
+    await disabledEconomyPromise;
+
+    const playStatePromise = waitForEvent<{
+      config: {
+        economy: {
+          enabled: boolean;
+          currencySeconds: number;
+          currentTrackId: string | null;
+          gameOver: boolean;
+          lastError: string | null;
+        };
+        tracks: Array<{ trackId: string; playing: boolean }>;
+      };
+    }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
+
+    receiver.emit(WS_EVENTS.CONTROL_MESSAGE, {
+      command: "request_track_play",
+      targetId: "economy-disabled-a",
+      payload: {
+        trackId: "track_01",
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    const playState = await playStatePromise;
+    expect(playState.config.economy).toMatchObject({
+      enabled: false,
+      currencySeconds: 0,
+      currentTrackId: "track_01",
+      gameOver: false,
+      lastError: null,
+    });
+    expect(playState.config.tracks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ trackId: "track_01", playing: true }),
+      ])
+    );
+  });
+
   it("does not let a receiver bypass economy with set_track_state playing true", async () => {
     const receiver = await connectSocket(baseUrl);
     sockets.push(receiver);
@@ -2733,10 +2836,24 @@ describe("controller HTTP API", () => {
       ]),
       correctChoiceIndex: expect.any(Number),
       iterationDurationMs: 300,
+      barCycleDurationMs: expect.any(Number),
+      barStartProgress: expect.any(Number),
     });
     expect(firstRound.choices).toHaveLength(2);
     expect(firstRound.correctChoiceIndex).toBeGreaterThanOrEqual(0);
     expect(firstRound.correctChoiceIndex).toBeLessThan(2);
+    expect(firstRound.barCycleDurationMs).toBeGreaterThan(0);
+    expect(firstRound.barStartProgress).toBeGreaterThanOrEqual(0);
+    expect(firstRound.barStartProgress).toBeLessThanOrEqual(1);
+    expect(firstRound.choices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trackId: expect.any(String),
+          trackLabel: expect.any(String),
+          trackUrl: expect.any(String),
+        }),
+      ])
+    );
 
     await new Promise(resolve => setTimeout(resolve, 150));
 
@@ -2802,10 +2919,10 @@ describe("controller HTTP API", () => {
     });
     expect(
       correctState.config.colorChallenge.lastResult.greenness
-    ).toBeGreaterThan(0.5);
+    ).toBeGreaterThan(0);
     expect(
       correctState.config.colorChallenge.lastResult.scoreDelta
-    ).toBeGreaterThan(1.5);
+    ).toBeGreaterThan(0);
     expect(correctState.config.colorChallenge.score).toBeGreaterThan(1);
     expect(correctState.config.colorChallenge.iterationId).toBe(
       firstNextRound.iterationId
@@ -2967,6 +3084,17 @@ describe("controller HTTP API", () => {
         wrong: 1,
         misses: 1,
         gameOvers: 1,
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            choices: expect.arrayContaining([
+              expect.objectContaining({
+                trackId: expect.any(String),
+                trackLabel: expect.any(String),
+                trackUrl: expect.any(String),
+              }),
+            ]),
+          }),
+        ]),
       },
     });
   });

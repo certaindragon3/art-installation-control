@@ -15,6 +15,7 @@ import {
   clampNormalizedCoordinate,
   CONFIG_TTL_MS,
   createColorChallengeRound,
+  DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS,
   createDefaultColorChallengeConfig,
   evaluateColorChallengeRound,
   type ControlInputMessage,
@@ -376,7 +377,11 @@ function startColorChallengeRound(
 
   assignColorChallengeRound(
     challenge,
-    createColorChallengeRound(challenge, new Date(now).toISOString())
+    createColorChallengeRound(
+      challenge,
+      new Date(now).toISOString(),
+      state.config.tracks
+    )
   );
 }
 
@@ -420,12 +425,46 @@ function normalizeColorChallengeRoundProposal(
   }
 
   const normalizedChoices = proposal.choices
-    .map(choice => {
+    .map((choice, index) => {
       const colorId =
         typeof choice?.colorId === "string" ? choice.colorId.trim() : "";
-      return challenge.palette.find(color => color.colorId === colorId) ?? null;
+      const color = challenge.palette.find(
+        candidate => candidate.colorId === colorId
+      );
+      if (!color) {
+        return null;
+      }
+
+      const trackId =
+        typeof choice?.trackId === "string" ? choice.trackId.trim() : "";
+      const linkedTrack =
+        trackId.length > 0
+          ? state.config.tracks.find(
+              track =>
+                track.trackId === trackId &&
+                typeof track.url === "string" &&
+                track.url.trim().length > 0
+            )
+          : null;
+
+      return {
+        ...color,
+        trackId: linkedTrack?.trackId ?? null,
+        trackLabel: linkedTrack?.label ?? null,
+        trackUrl: linkedTrack?.url ?? null,
+        _index: index,
+      };
     })
-    .filter((choice): choice is ColorChallengeColor => choice !== null);
+    .filter(
+      (
+        choice
+      ): choice is ColorChallengeColor & {
+        trackId: string | null;
+        trackLabel: string | null;
+        trackUrl: string | null;
+        _index: number;
+      } => choice !== null
+    );
 
   if (
     normalizedChoices.length !== 2 ||
@@ -464,16 +503,33 @@ function normalizeColorChallengeRoundProposal(
       ? proposal.iterationStartedAt
       : resolvedAt;
   const parsedStartedAt = parseIsoMs(startedAt, NaN);
+  const barCycleDurationMs = Math.max(
+    250,
+    clampColorChallengeInterval(
+      proposal.barCycleDurationMs,
+      DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS
+    )
+  );
+  const barStartProgress = clamp01(
+    typeof proposal.barStartProgress === "number"
+      ? proposal.barStartProgress
+      : 0.5,
+    0.5
+  );
 
   return {
     iterationId,
     assignedColorId,
-    choices: normalizedChoices.map(choice => ({ ...choice })),
+    choices: normalizedChoices.map(({ _index: _ignoredIndex, ...choice }) => ({
+      ...choice,
+    })),
     correctChoiceIndex,
     iterationStartedAt: Number.isFinite(parsedStartedAt)
       ? new Date(parsedStartedAt).toISOString()
       : resolvedAt,
     iterationDurationMs,
+    barCycleDurationMs,
+    barStartProgress,
   };
 }
 
@@ -704,10 +760,6 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
   const lastUpdatedAtMs = parseIsoMs(economy.lastUpdatedAt, now);
   const elapsedSeconds = Math.max(0, (now - lastUpdatedAtMs) / 1000);
 
-  if (economy.gameOver || !economy.enabled) {
-    return false;
-  }
-
   const currentTrack = economy.currentTrackId
     ? getTrack(state, economy.currentTrackId)
     : undefined;
@@ -726,6 +778,38 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
     Boolean(economy.currentTrackId) &&
     Number.isFinite(playEndsAtMs) &&
     playEndsAtMs <= now;
+
+  if (playShouldEnd && economy.currentTrackId) {
+    const endingTrack = getTrack(state, economy.currentTrackId);
+    if (endingTrack) {
+      endingTrack.playing = false;
+    }
+    economy.currentTrackId = null;
+    economy.playStartedAt = null;
+    economy.playEndsAt = null;
+  }
+
+  if (economy.gameOver || !economy.enabled) {
+    if (playShouldEnd) {
+      economy.lastUpdatedAt = new Date(now).toISOString();
+    }
+
+    return (
+      previousSnapshot !==
+      JSON.stringify({
+        currencySeconds: economy.currencySeconds,
+        inflation: economy.inflation,
+        currentTrackId: economy.currentTrackId,
+        playStartedAt: economy.playStartedAt,
+        playEndsAt: economy.playEndsAt,
+        gameOver: economy.gameOver,
+        lastUpdatedAt: economy.lastUpdatedAt,
+        playingTracks: state.config.tracks
+          .filter(track => track.playing)
+          .map(track => track.trackId),
+      })
+    );
+  }
 
   if (elapsedSeconds < 0.05 && !playShouldEnd) {
     return (
@@ -754,11 +838,7 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
           elapsedSeconds
         );
       }
-    } else if (
-      economy.currentTrackId &&
-      Number.isFinite(playEndsAtMs) &&
-      playEndsAtMs <= now
-    ) {
+    } else if (playShouldEnd) {
       const playingElapsedSeconds = Math.max(
         0,
         (playEndsAtMs - lastUpdatedAtMs) / 1000
@@ -773,18 +853,11 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
       } else {
         economy.inflation = advanceEconomyInflation(
           economy.inflation,
-          economy.inflationGrowthPerSecond,
+        economy.inflationGrowthPerSecond,
           idleElapsedSeconds
         );
       }
       economy.currencySeconds += economy.earnRatePerSecond * idleElapsedSeconds;
-      const endingTrack = getTrack(state, economy.currentTrackId);
-      if (endingTrack) {
-        endingTrack.playing = false;
-      }
-      economy.currentTrackId = null;
-      economy.playStartedAt = null;
-      economy.playEndsAt = null;
     } else {
       economy.currencySeconds += economy.earnRatePerSecond * elapsedSeconds;
       economy.inflation = advanceEconomyInflation(
@@ -872,12 +945,9 @@ function requestTrackPlay(
   advanceEconomy(state, now);
   const economy = state.config.economy;
   const track = getTrack(state, payload.trackId);
+  const economyActive = economy.enabled;
 
-  if (!economy.enabled) {
-    return rejectEconomyRequest(state, "economy_disabled", now);
-  }
-
-  if (economy.gameOver) {
+  if (economyActive && economy.gameOver) {
     return rejectEconomyRequest(state, "game_over", now);
   }
 
@@ -904,17 +974,20 @@ function requestTrackPlay(
     return rejectEconomyRequest(state, "already_playing", now);
   }
 
-  const cost = calculateTrackCost(track, economy);
-  if (cost === null) {
-    return rejectEconomyRequest(state, "missing_duration", now);
+  if (economyActive) {
+    const cost = calculateTrackCost(track, economy);
+    if (cost === null) {
+      return rejectEconomyRequest(state, "missing_duration", now);
+    }
+
+    if (economy.currencySeconds - cost < 0) {
+      triggerEconomyGameOver(state, "insufficient_currency", now);
+      return true;
+    }
+
+    economy.currencySeconds -= cost;
   }
 
-  if (economy.currencySeconds - cost < 0) {
-    triggerEconomyGameOver(state, "insufficient_currency", now);
-    return true;
-  }
-
-  economy.currencySeconds -= cost;
   economy.currentTrackId = track.trackId;
   economy.playStartedAt = new Date(now).toISOString();
   economy.playEndsAt = new Date(
@@ -2030,9 +2103,6 @@ function assignEconomyPatch(
 
   if (typeof patch.enabled === "boolean") {
     economy.enabled = patch.enabled;
-    if (!patch.enabled) {
-      stopAllTracks(state);
-    }
   }
 
   economy.startingSeconds = clampNonNegativeNumber(

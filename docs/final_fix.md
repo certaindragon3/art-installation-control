@@ -13,3 +13,11 @@ Double check the map coordinates re-mapper. The  problem seems to be that the re
 economy关闭的时候最上方不要显示disabled控件，最好那个卡片不要显示
 
 economy跟是否能放track要解耦
+
+Disentangle economy logic from tracks playability (the state is determined by accumulated seconds only when economy is active).
+Remove the "Disabled" post when time challenge or economy are not used.
+Remove "ColorChallenge" explanation from the interface, so the options are visible right away.
+
+Assigned tracks should be always shown in scrambled order, for now they are shown always in the same order (e.g., all city first, all nature second, and within those sets they always have predetermined order). Just shuffle their order before showing
+
+

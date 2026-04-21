@@ -202,13 +202,21 @@ export interface ColorChallengeColor {
   color: string;
 }
 
+export interface ColorChallengeChoice extends ColorChallengeColor {
+  trackId: string | null;
+  trackLabel: string | null;
+  trackUrl: string | null;
+}
+
 export interface ColorChallengeRoundSnapshot {
   iterationId: string;
   assignedColorId: string;
-  choices: ColorChallengeColor[];
+  choices: ColorChallengeChoice[];
   correctChoiceIndex: number;
   iterationStartedAt: string;
   iterationDurationMs: number;
+  barCycleDurationMs: number;
+  barStartProgress: number;
 }
 
 export interface ColorChallengeResult {
@@ -233,10 +241,12 @@ export interface ColorChallengeConfig extends VisibilityConfig {
   iterationId: string | null;
   assignedColorId: string | null;
   palette: ColorChallengeColor[];
-  choices: ColorChallengeColor[];
+  choices: ColorChallengeChoice[];
   correctChoiceIndex: number | null;
   iterationStartedAt: string | null;
   iterationDurationMs: number;
+  barCycleDurationMs: number;
+  barStartProgress: number;
   minIntervalMs: number;
   maxIntervalMs: number;
   maxReward: number;
@@ -499,7 +509,7 @@ export interface ColorChallengeEventExport extends ColorChallengeResult {
   label: string;
   timestamp: number;
   isoTimestamp: string;
-  choices: ColorChallengeColor[];
+  choices: ColorChallengeChoice[];
 }
 
 export interface ColorChallengeExport {
@@ -571,6 +581,7 @@ export const DEFAULT_ICON_COLOR = "#6366f1";
 export const DEFAULT_TIMING_TARGET_CENTER = 0.5;
 export const DEFAULT_TIMING_TOLERANCE = 0.08;
 export const DEFAULT_TRACK_CATEGORY_COLOR = "#64748b";
+export const DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS = 900;
 export const DEFAULT_COLOR_CHALLENGE_PALETTE: readonly ColorChallengeColor[] = [
   { colorId: "red", label: "Red", color: "#ef4444" },
   { colorId: "green", label: "Green", color: "#22c55e" },
@@ -611,6 +622,82 @@ function pickRandomItem<T>(items: readonly T[]) {
   return items[Math.floor(Math.random() * items.length)]!;
 }
 
+function isUsableColorChallengeTrack(
+  track: Pick<
+    TrackState,
+    "trackId" | "label" | "url" | "visible" | "enabled" | "playable"
+  >
+) {
+  return (
+    track.enabled &&
+    track.playable &&
+    typeof track.url === "string" &&
+    track.url.trim().length > 0
+  );
+}
+
+function toColorChallengeChoice(
+  color: ColorChallengeColor,
+  track:
+    | Pick<TrackState, "trackId" | "label" | "url">
+    | null
+    | undefined = null
+): ColorChallengeChoice {
+  return {
+    ...color,
+    trackId: track?.trackId ?? null,
+    trackLabel: track?.label ?? null,
+    trackUrl: track?.url ?? null,
+  };
+}
+
+export function resolveColorChallengeTimingState(
+  challenge: Pick<
+    ColorChallengeConfig,
+    | "iterationStartedAt"
+    | "iterationDurationMs"
+    | "barCycleDurationMs"
+    | "barStartProgress"
+  >,
+  nowMs: number
+) {
+  const fallbackBarProgress = clamp01(challenge.barStartProgress, 0.5);
+  if (!challenge.iterationStartedAt || challenge.iterationDurationMs <= 0) {
+    return {
+      roundProgress: 0,
+      t: fallbackBarProgress,
+      greenness: calculateColorChallengeGreenness(fallbackBarProgress),
+      remainingMs: Math.max(0, challenge.iterationDurationMs),
+    };
+  }
+
+  const startedAtMs = new Date(challenge.iterationStartedAt).getTime();
+  const elapsedMs = Number.isFinite(startedAtMs)
+    ? Math.max(0, nowMs - startedAtMs)
+    : 0;
+  const roundProgress = clamp01(
+    elapsedMs / Math.max(1, challenge.iterationDurationMs),
+    0
+  );
+  const cycleDurationMs = Math.max(
+    250,
+    Number.isFinite(challenge.barCycleDurationMs)
+      ? challenge.barCycleDurationMs
+      : DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS
+  );
+  const phase =
+    fallbackBarProgress + (elapsedMs * 2) / Math.max(1, cycleDurationMs);
+  const wrappedPhase = ((phase % 2) + 2) % 2;
+  const barProgress = wrappedPhase <= 1 ? wrappedPhase : 2 - wrappedPhase;
+
+  return {
+    roundProgress,
+    t: barProgress,
+    greenness: calculateColorChallengeGreenness(barProgress),
+    remainingMs: Math.max(0, challenge.iterationDurationMs - elapsedMs),
+  };
+}
+
 export function hasValidColorChallengeRound(
   challenge: Pick<
     ColorChallengeConfig,
@@ -620,6 +707,8 @@ export function hasValidColorChallengeRound(
     | "correctChoiceIndex"
     | "iterationStartedAt"
     | "iterationDurationMs"
+    | "barCycleDurationMs"
+    | "barStartProgress"
   >
 ) {
   const correctChoiceIndex = challenge.correctChoiceIndex;
@@ -638,6 +727,9 @@ export function hasValidColorChallengeRound(
     typeof challenge.iterationStartedAt === "string" &&
     challenge.iterationStartedAt.trim().length > 0 &&
     challenge.iterationDurationMs > 0 &&
+    challenge.barCycleDurationMs > 0 &&
+    challenge.barStartProgress >= 0 &&
+    challenge.barStartProgress <= 1 &&
     challenge.choices.some(
       choice => choice.colorId === challenge.assignedColorId
     ) &&
@@ -654,7 +746,11 @@ export function createColorChallengeRound(
     | "minIntervalMs"
     | "maxIntervalMs"
   >,
-  startedAt = new Date().toISOString()
+  startedAt = new Date().toISOString(),
+  trackLibrary: readonly Pick<
+    TrackState,
+    "trackId" | "label" | "url" | "visible" | "enabled" | "playable"
+  >[] = []
 ): ColorChallengeRoundSnapshot {
   const palette =
     challenge.palette.length >= 2
@@ -685,14 +781,35 @@ export function createColorChallengeRound(
       : Math.round(
           minIntervalMs + Math.random() * (maxIntervalMs - minIntervalMs)
         );
+  const playableTracks = trackLibrary.filter(isUsableColorChallengeTrack);
+  const visibleTracks = playableTracks.filter(track => track.visible);
+  const correctTrack =
+    visibleTracks.length > 0
+      ? pickRandomItem(visibleTracks)
+      : playableTracks.length > 0
+        ? pickRandomItem(playableTracks)
+        : null;
+  const wrongTrackCandidates = playableTracks.filter(
+    track => track.trackId !== correctTrack?.trackId
+  );
+  const wrongTrack =
+    wrongTrackCandidates.length > 0 ? pickRandomItem(wrongTrackCandidates) : null;
+  const choicesWithTracks = choices.map(choice =>
+    toColorChallengeChoice(
+      choice,
+      choice.colorId === assignedColor.colorId ? correctTrack : wrongTrack
+    )
+  );
 
   return {
     iterationId: createGeneratedId("color-round"),
     assignedColorId: assignedColor.colorId,
-    choices: choices.map(choice => ({ ...choice })),
+    choices: choicesWithTracks,
     correctChoiceIndex,
     iterationStartedAt: startedAt,
     iterationDurationMs,
+    barCycleDurationMs: DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS,
+    barStartProgress: Math.random(),
   };
 }
 
@@ -705,6 +822,8 @@ export function assignColorChallengeRound(
     | "correctChoiceIndex"
     | "iterationStartedAt"
     | "iterationDurationMs"
+    | "barCycleDurationMs"
+    | "barStartProgress"
   >,
   round: ColorChallengeRoundSnapshot | null
 ) {
@@ -715,6 +834,8 @@ export function assignColorChallengeRound(
     challenge.correctChoiceIndex = null;
     challenge.iterationStartedAt = null;
     challenge.iterationDurationMs = 0;
+    challenge.barCycleDurationMs = DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS;
+    challenge.barStartProgress = 0.5;
     return;
   }
 
@@ -724,6 +845,8 @@ export function assignColorChallengeRound(
   challenge.correctChoiceIndex = round.correctChoiceIndex;
   challenge.iterationStartedAt = round.iterationStartedAt;
   challenge.iterationDurationMs = round.iterationDurationMs;
+  challenge.barCycleDurationMs = round.barCycleDurationMs;
+  challenge.barStartProgress = clamp01(round.barStartProgress, 0.5);
 }
 
 export function evaluateColorChallengeRound(input: {
@@ -735,6 +858,8 @@ export function evaluateColorChallengeRound(input: {
     | "correctChoiceIndex"
     | "iterationStartedAt"
     | "iterationDurationMs"
+    | "barCycleDurationMs"
+    | "barStartProgress"
     | "maxReward"
     | "minWrongPenalty"
     | "maxWrongPenalty"
@@ -771,13 +896,11 @@ export function evaluateColorChallengeRound(input: {
     return null;
   }
 
-  const t = clamp01(
-    (resolvedAtMs - startedAtMs) / Math.max(1, challenge.iterationDurationMs),
-    0
-  );
+  const timing = resolveColorChallengeTimingState(challenge, resolvedAtMs);
+  const roundProgress = timing.roundProgress;
 
   if (choiceIndex === null) {
-    if (t < 1) {
+    if (roundProgress < 1) {
       return null;
     }
 
@@ -794,7 +917,7 @@ export function evaluateColorChallengeRound(input: {
     };
   }
 
-  if (t >= 1) {
+  if (roundProgress >= 1) {
     return {
       reason: "miss",
       choiceIndex: null,
@@ -810,7 +933,7 @@ export function evaluateColorChallengeRound(input: {
 
   const chosenColor = challenge.choices[choiceIndex]!;
   const correct = choiceIndex === challenge.correctChoiceIndex;
-  const greenness = calculateColorChallengeGreenness(t);
+  const greenness = timing.greenness;
 
   return {
     reason: correct ? "correct" : "wrong",
@@ -819,7 +942,7 @@ export function evaluateColorChallengeRound(input: {
     assignedColorId: challenge.assignedColorId,
     correctChoiceIndex: challenge.correctChoiceIndex,
     iterationId: challenge.iterationId,
-    t,
+    t: timing.t,
     greenness,
     scoreDelta: correct
       ? challenge.maxReward * greenness
@@ -972,6 +1095,8 @@ export function createDefaultColorChallengeConfig(): ColorChallengeConfig {
     correctChoiceIndex: null,
     iterationStartedAt: null,
     iterationDurationMs: 2500,
+    barCycleDurationMs: DEFAULT_COLOR_CHALLENGE_BAR_CYCLE_MS,
+    barStartProgress: 0.5,
     minIntervalMs: 2000,
     maxIntervalMs: 3000,
     maxReward: 3,

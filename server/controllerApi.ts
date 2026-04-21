@@ -504,6 +504,18 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
                               colorId: choice.colorId,
                               label: choice.label,
                               color: choice.color,
+                              trackId:
+                                typeof choice.trackId === "string"
+                                  ? choice.trackId
+                                  : null,
+                              trackLabel:
+                                typeof choice.trackLabel === "string"
+                                  ? choice.trackLabel
+                                  : null,
+                              trackUrl:
+                                typeof choice.trackUrl === "string"
+                                  ? choice.trackUrl
+                                  : null,
                             },
                           ]
                         : []
@@ -524,6 +536,17 @@ function normalizeUnifiedCommand(body: JsonRecord): UnifiedCommand | null {
                   Number.isFinite(body.payload.nextRound.iterationDurationMs)
                     ? body.payload.nextRound.iterationDurationMs
                     : 0,
+                barCycleDurationMs:
+                  typeof body.payload.nextRound.barCycleDurationMs ===
+                    "number" &&
+                  Number.isFinite(body.payload.nextRound.barCycleDurationMs)
+                    ? body.payload.nextRound.barCycleDurationMs
+                    : 0,
+                barStartProgress:
+                  typeof body.payload.nextRound.barStartProgress === "number" &&
+                  Number.isFinite(body.payload.nextRound.barStartProgress)
+                    ? body.payload.nextRound.barStartProgress
+                    : 0.5,
               }
             : undefined,
         },

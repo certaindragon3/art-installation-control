@@ -293,6 +293,36 @@ function createMapMovementDraft(map: MapConfig | null): MapMovementDraft {
   };
 }
 
+function resolveMapDisplayPosition(map: MapConfig | null, nowMs: number) {
+  const movement = map?.movement;
+  if (!movement) {
+    return {
+      x: clampNormalizedCoordinate(map?.playerPosX ?? 0.5),
+      y: clampNormalizedCoordinate(map?.playerPosY ?? 0.5),
+      progress: null,
+    };
+  }
+
+  const startedAtMs = new Date(movement.startedAt).getTime();
+  const elapsedMs = Number.isFinite(startedAtMs)
+    ? Math.max(0, nowMs - startedAtMs)
+    : 0;
+  const durationMs = Math.max(1, movement.durationMs);
+  const progress = movement.loop
+    ? (elapsedMs % durationMs) / durationMs
+    : Math.min(1, elapsedMs / durationMs);
+  const fromX = clampNormalizedCoordinate(movement.fromX);
+  const fromY = clampNormalizedCoordinate(movement.fromY);
+  const toX = clampNormalizedCoordinate(movement.toX);
+  const toY = clampNormalizedCoordinate(movement.toY);
+
+  return {
+    x: fromX + (toX - fromX) * progress,
+    y: fromY + (toY - fromY) * progress,
+    progress,
+  };
+}
+
 function createMachineId(prefix: "track" | "vote", label: string) {
   const normalized = label
     .toLowerCase()
@@ -336,6 +366,7 @@ export default function Controller() {
   const [mapMovementDraft, setMapMovementDraft] = useState<MapMovementDraft>(
     () => createMapMovementDraft(null)
   );
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [voteVisibilityDuration, setVoteVisibilityDuration] = useState(15);
   const [voteAllowRevote, setVoteAllowRevote] = useState(false);
   const [exportingVotes, setExportingVotes] = useState(false);
@@ -394,10 +425,55 @@ export default function Controller() {
     () => selectedReceiver?.config.map ?? null,
     [selectedReceiver]
   );
+  const selectedMapDraftSyncKey = useMemo(
+    () =>
+      selectedMap
+        ? [
+            selectedMap.playerPosX,
+            selectedMap.playerPosY,
+            selectedMap.movement?.fromX ?? "none",
+            selectedMap.movement?.fromY ?? "none",
+            selectedMap.movement?.toX ?? "none",
+            selectedMap.movement?.toY ?? "none",
+            selectedMap.movement?.durationMs ?? "none",
+            selectedMap.movement?.loop ?? "none",
+          ].join("|")
+        : "none",
+    [
+      selectedMap?.movement?.durationMs,
+      selectedMap?.movement?.fromX,
+      selectedMap?.movement?.fromY,
+      selectedMap?.movement?.loop,
+      selectedMap?.movement?.toX,
+      selectedMap?.movement?.toY,
+      selectedMap?.playerPosX,
+      selectedMap?.playerPosY,
+    ]
+  );
+  const selectedMapDisplayPosition = useMemo(
+    () => resolveMapDisplayPosition(selectedMap, nowMs),
+    [nowMs, selectedMap]
+  );
 
   useEffect(() => {
     setMapMovementDraft(createMapMovementDraft(selectedMap));
-  }, [selectedReceiverId]);
+  }, [selectedMapDraftSyncKey, selectedReceiverId]);
+
+  useEffect(() => {
+    if (!selectedMap?.movement) {
+      return;
+    }
+
+    let frameId = 0;
+
+    const tick = () => {
+      setNowMs(Date.now());
+      frameId = window.requestAnimationFrame(tick);
+    };
+
+    frameId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [selectedMap?.movement]);
 
   const selectedTiming = useMemo(
     () => selectedReceiver?.config.timing ?? null,
@@ -1216,7 +1292,7 @@ export default function Controller() {
         new Blob([buildScoreboardCsv(body.scoreboard)], {
           type: "text/csv;charset=utf-8",
         }),
-        `scoreboard-${new Date().toISOString()}.csv`
+        `economy-and-scoreboard-${new Date().toISOString()}.csv`
       );
 
       postDiscreteInteraction({
@@ -1240,11 +1316,11 @@ export default function Controller() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">
-                Phase 11 Controller
+                Phase 12 Controller
               </h1>
               <p className="text-xs text-muted-foreground">
-                Color challenge, receiver-led economy, voting, map, and live
-                receiver control
+                Final polish controls for color challenge, receiver playback,
+                voting, map, and live receiver state
               </p>
             </div>
           </div>
@@ -1334,7 +1410,8 @@ export default function Controller() {
                 <CardDescription>
                   Reset clears loop, groups, volume state, text, and all other
                   runtime modules, including pulse tempo and marker state.
-                  Score download exports the current receiver scoreboard.
+                  Scoreboard download exports both economy remaining seconds
+                  and score-system values.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1354,8 +1431,8 @@ export default function Controller() {
                 >
                   <Download data-icon="inline-start" />
                   {exportingScoreboard
-                    ? "Downloading Score CSV..."
-                    : "Download Score CSV"}
+                    ? "Downloading Scoreboard CSV..."
+                    : "Download Economy + Score CSV"}
                 </Button>
                 <p className="text-xs text-muted-foreground">
                   Exports current economy remaining seconds, manual score, and
@@ -2518,8 +2595,9 @@ export default function Controller() {
 
                     <div className="space-y-4">
                       <ClassroomMap
-                        x={selectedMap?.playerPosX ?? 0.5}
-                        y={selectedMap?.playerPosY ?? 0.5}
+                        x={selectedMapDisplayPosition.x}
+                        y={selectedMapDisplayPosition.y}
+                        animated={Boolean(selectedMap?.movement)}
                         disabled={!selectedMap?.enabled}
                         markerLabel={selectedReceiver.label}
                       />
@@ -2527,11 +2605,11 @@ export default function Controller() {
                         Preview keeps the same internal normalized data while
                         this panel uses a 0-100 control scale. Current: X{" "}
                         {mapXNormalizedToScale(
-                          selectedMap?.playerPosX ?? 0.5
+                          selectedMapDisplayPosition.x
                         ).toFixed(1)}{" "}
                         · Y{" "}
                         {mapYNormalizedToScale(
-                          selectedMap?.playerPosY ?? 0.5
+                          selectedMapDisplayPosition.y
                         ).toFixed(1)}
                       </p>
                       {selectedMap?.movement ? (

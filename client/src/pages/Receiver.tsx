@@ -32,7 +32,6 @@ import {
   assignColorChallengeRound,
   clampNormalizedCoordinate,
   calculateTrackCost,
-  calculateColorChallengeGreenness,
   createColorChallengeRound,
   createDefaultReceiverConfig,
   createGeneratedId,
@@ -43,6 +42,7 @@ import {
   hasValidColorChallengeRound,
   type MapConfig,
   type PulseEvent,
+  resolveColorChallengeTimingState,
   type TimingInteractionValue,
   type TrackState,
   type VoteOption,
@@ -104,25 +104,18 @@ function resolveColorChallengeProgress(
   challenge: ColorChallengeConfig,
   nowMs: number
 ) {
-  if (!challenge.iterationStartedAt || challenge.iterationDurationMs <= 0) {
-    return {
-      t: 0,
-      greenness: 0,
-      remainingMs: challenge.iterationDurationMs,
-    };
+  return resolveColorChallengeTimingState(challenge, nowMs);
+}
+
+function shuffleTrackIds(trackIds: readonly string[]) {
+  const next = [...trackIds];
+
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex]!, next[index]!];
   }
 
-  const startedAtMs = new Date(challenge.iterationStartedAt).getTime();
-  const elapsedMs = Number.isFinite(startedAtMs)
-    ? Math.max(0, nowMs - startedAtMs)
-    : 0;
-  const t = Math.min(1, elapsedMs / Math.max(1, challenge.iterationDurationMs));
-
-  return {
-    t,
-    greenness: calculateColorChallengeGreenness(t),
-    remainingMs: Math.max(0, challenge.iterationDurationMs - elapsedMs),
-  };
+  return next;
 }
 
 function resolveEconomyDisplay(economy: EconomyConfig, nowMs: number) {
@@ -180,12 +173,12 @@ function resolveEconomyStateLabel(economy: EconomyConfig) {
     return "Game Over";
   }
 
-  if (!economy.enabled) {
-    return "Disabled";
-  }
-
   if (economy.currentTrackId) {
     return "Playing";
+  }
+
+  if (!economy.enabled) {
+    return "Ready";
   }
 
   return "Ready";
@@ -250,6 +243,7 @@ export default function Receiver() {
   });
 
   const audioMapRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const colorChallengeChoiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const [messageFlash, setMessageFlash] = useState(false);
   const [optimisticVoteSelection, setOptimisticVoteSelection] = useState<{
     voteId: string;
@@ -263,6 +257,7 @@ export default function Receiver() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [lastTimingResult, setLastTimingResult] =
     useState<ReceiverTimingResult | null>(null);
+  const [visibleTrackOrder, setVisibleTrackOrder] = useState<string[]>([]);
   const latestColorChallengeSubmissionIdRef = useRef<string | null>(null);
   const colorChallengeResyncTimerRef = useRef<number | null>(null);
   const resolvedColorChallengeRoundIdRef = useRef<string | null>(null);
@@ -295,6 +290,10 @@ export default function Receiver() {
   );
   const clampedMapX = clampNormalizedCoordinate(mapDisplayPosition.x);
   const clampedMapY = clampNormalizedCoordinate(mapDisplayPosition.y);
+  const trackProgressActive = useMemo(
+    () => config.tracks.some(track => track.playing),
+    [config.tracks]
+  );
   const activeVote = useMemo(() => {
     if (!config.vote?.visible || !config.vote.enabled) {
       return null;
@@ -457,8 +456,9 @@ export default function Receiver() {
     if (
       !pulseEnabled &&
       !mapMovementActive &&
-      !config.economy.visible &&
-      !config.colorChallenge.visible
+      !config.colorChallenge.visible &&
+      !trackProgressActive &&
+      !economy.enabled
     ) {
       return;
     }
@@ -474,9 +474,10 @@ export default function Receiver() {
     return () => window.cancelAnimationFrame(frameId);
   }, [
     config.colorChallenge.visible,
-    config.economy.visible,
+    economy.enabled,
     mapMovementActive,
     pulseEnabled,
+    trackProgressActive,
   ]);
 
   useEffect(() => {
@@ -484,6 +485,7 @@ export default function Receiver() {
       if (colorChallengeResyncTimerRef.current !== null) {
         window.clearTimeout(colorChallengeResyncTimerRef.current);
       }
+      colorChallengeChoiceAudioRef.current?.pause();
       audioMapRef.current.forEach(audio => {
         audio.pause();
       });
@@ -491,10 +493,35 @@ export default function Receiver() {
     };
   }, []);
 
-  const visibleTracks = useMemo(
-    () => config.tracks.filter(track => track.visible),
+  const visibleTrackIdsKey = useMemo(
+    () =>
+      config.tracks
+        .filter(track => track.visible)
+        .map(track => track.trackId)
+        .sort()
+        .join("|"),
     [config.tracks]
   );
+
+  useEffect(() => {
+    const visibleTrackIds = visibleTrackIdsKey
+      ? visibleTrackIdsKey.split("|")
+      : [];
+    setVisibleTrackOrder(shuffleTrackIds(visibleTrackIds));
+  }, [receiverId, visibleTrackIdsKey]);
+
+  const visibleTracks = useMemo(() => {
+    const visible = config.tracks.filter(track => track.visible);
+    const order = new Map(
+      visibleTrackOrder.map((trackId, index) => [trackId, index])
+    );
+
+    return [...visible].sort((left, right) => {
+      const leftOrder = order.get(left.trackId) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = order.get(right.trackId) ?? Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || left.trackId.localeCompare(right.trackId);
+    });
+  }, [config.tracks, visibleTrackOrder]);
 
   const pulsePhase = useMemo(() => {
     if (!pulseEnabled || !pulseEvent) {
@@ -627,6 +654,28 @@ export default function Receiver() {
     [dispatchTrackPatch]
   );
 
+  const playColorChallengeChoiceAudio = useCallback((trackUrl: string | null) => {
+    if (!trackUrl) {
+      return;
+    }
+
+    const absoluteUrl = new URL(trackUrl, window.location.origin).toString();
+    const audio = colorChallengeChoiceAudioRef.current ?? new Audio(trackUrl);
+    if (colorChallengeChoiceAudioRef.current === null) {
+      audio.preload = "auto";
+      colorChallengeChoiceAudioRef.current = audio;
+    }
+
+    audio.pause();
+    if (audio.src !== absoluteUrl) {
+      audio.src = trackUrl;
+    }
+    audio.currentTime = 0;
+    audio.play().catch(error => {
+      console.warn("Failed to play color challenge choice audio:", error);
+    });
+  }, []);
+
   const handleVoteSelection = useCallback(
     (optionId: string) => {
       if (!activeVote) {
@@ -733,7 +782,7 @@ export default function Receiver() {
       };
       const nextRound = gameOver
         ? null
-        : createColorChallengeRound(activeChallenge, resolvedAt);
+        : createColorChallengeRound(activeChallenge, resolvedAt, config.tracks);
 
       if (nextRound) {
         assignColorChallengeRound(nextChallenge, nextRound);
@@ -779,6 +828,14 @@ export default function Receiver() {
         value: {
           choiceIndex: evaluation.choiceIndex,
           colorId: evaluation.colorId,
+          trackId:
+            choiceIndex !== null
+              ? activeChallenge.choices[choiceIndex]?.trackId ?? null
+              : null,
+          trackLabel:
+            choiceIndex !== null
+              ? activeChallenge.choices[choiceIndex]?.trackLabel ?? null
+              : null,
           reason: evaluation.reason,
           t: evaluation.t,
           greenness: evaluation.greenness,
@@ -813,9 +870,10 @@ export default function Receiver() {
         return;
       }
 
+      playColorChallengeChoiceAudio(choice.trackUrl ?? null);
       resolveColorChallengeLocally(choiceIndex);
     },
-    [colorChallenge, resolveColorChallengeLocally]
+    [colorChallenge, playColorChallengeChoiceAudio, resolveColorChallengeLocally]
   );
 
   useEffect(() => {
@@ -825,7 +883,7 @@ export default function Receiver() {
       !colorChallenge.enabled ||
       colorChallenge.gameOver ||
       !hasValidColorChallengeRound(colorChallenge) ||
-      colorChallengeProgress.t < 1 ||
+      colorChallengeProgress.roundProgress < 1 ||
       resolvedColorChallengeRoundIdRef.current === colorChallenge.iterationId
     ) {
       return;
@@ -834,10 +892,16 @@ export default function Receiver() {
     resolveColorChallengeLocally(null);
   }, [
     colorChallenge,
-    colorChallengeProgress.t,
+    colorChallengeProgress.roundProgress,
     connected,
     resolveColorChallengeLocally,
   ]);
+
+  const showEconomyStatus = economy.enabled || Boolean(economy.lastError);
+  const assignedChallengeChoice =
+    colorChallenge.correctChoiceIndex !== null
+      ? colorChallenge.choices[colorChallenge.correctChoiceIndex] ?? null
+      : null;
 
   return (
     <div className="dark min-h-screen bg-zinc-950 text-zinc-50">
@@ -855,7 +919,9 @@ export default function Receiver() {
               <p className="text-xs text-zinc-400">
                 {receiverIdWasAssigned
                   ? `Requested ${requestedReceiverId}, assigned ${receiverId}`
-                  : "Choose sounds when you have enough seconds."}
+                  : economy.enabled
+                    ? "Choose sounds when you have enough seconds."
+                    : "Choose sounds and follow the live challenges."}
               </p>
             </div>
           </div>
@@ -887,33 +953,37 @@ export default function Receiver() {
                 }}
               />
             </div>
-            <div
-              className={cn(
-                "mt-4 grid w-full max-w-sm gap-2",
-                economy.enabled ? "grid-cols-3" : "grid-cols-1"
-              )}
-            >
-              {economy.enabled ? (
+            {showEconomyStatus ? (
+              <div
+                className={cn(
+                  "mt-4 grid w-full max-w-sm gap-2",
+                  economy.enabled ? "grid-cols-3" : "grid-cols-1"
+                )}
+              >
+                {economy.enabled ? (
+                  <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                    <p className="text-[10px] uppercase text-zinc-400">Pool</p>
+                    <p className="text-lg font-semibold">
+                      {economy.currencySeconds.toFixed(1)}s
+                    </p>
+                  </div>
+                ) : null}
+                {economy.enabled ? (
+                  <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                    <p className="text-[10px] uppercase text-zinc-400">Cost x</p>
+                    <p className="text-lg font-semibold">
+                      {economy.inflation.toFixed(2)}
+                    </p>
+                  </div>
+                ) : null}
                 <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
-                  <p className="text-[10px] uppercase text-zinc-400">Pool</p>
-                  <p className="text-lg font-semibold">
-                    {economy.currencySeconds.toFixed(1)}s
+                  <p className="text-[10px] uppercase text-zinc-400">State</p>
+                  <p className="truncate text-lg font-semibold">
+                    {economyStateLabel}
                   </p>
                 </div>
-              ) : null}
-              {economy.enabled ? (
-                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
-                  <p className="text-[10px] uppercase text-zinc-400">Cost x</p>
-                  <p className="text-lg font-semibold">
-                    {economy.inflation.toFixed(2)}
-                  </p>
-                </div>
-              ) : null}
-              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
-                <p className="text-[10px] uppercase text-zinc-400">State</p>
-                <p className="truncate text-lg font-semibold">{economyStateLabel}</p>
               </div>
-            </div>
+            ) : null}
             {economy.lastError ? (
               <p className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
                 {economy.lastError.replace(/_/g, " ")}
@@ -1043,14 +1113,10 @@ export default function Receiver() {
                     <Palette />
                     Color Challenge
                   </CardTitle>
-                  <CardDescription>
-                    Match your assigned color. The center of the bar gives the
-                    largest reward, and wrong choices near the center hurt more.
-                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                    <div className="rounded-lg border border-border/60 bg-muted/25 px-4 py-3">
+                    <div className="rounded-xl border border-border/60 bg-muted/25 px-4 py-4">
                       <p className="text-xs uppercase text-muted-foreground">
                         Your Color
                       </p>
@@ -1060,22 +1126,28 @@ export default function Receiver() {
                             color.colorId === colorChallenge.assignedColorId
                         );
                         return (
-                          <div className="mt-2 flex min-w-0 items-center gap-3">
+                          <div className="mt-3 flex min-w-0 items-center gap-4">
                             <span
-                              className="size-8 shrink-0 rounded-lg border border-white/20"
+                              className="size-14 shrink-0 rounded-2xl border border-white/20 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
                               style={{
                                 backgroundColor:
                                   assigned?.color ?? "transparent",
                               }}
                             />
-                            <p className="truncate text-2xl font-semibold">
-                              {assigned?.label ?? "Waiting"}
-                            </p>
+                            <div className="min-w-0 space-y-1">
+                              <p className="truncate text-2xl font-semibold">
+                                {assigned?.label ?? "Waiting"}
+                              </p>
+                              <p className="truncate text-sm text-muted-foreground">
+                                {assignedChallengeChoice?.trackLabel ??
+                                  "Track will appear with the round"}
+                              </p>
+                            </div>
                           </div>
                         );
                       })()}
                     </div>
-                    <div className="rounded-lg border border-border/60 bg-muted/25 px-4 py-3 text-center">
+                    <div className="rounded-xl border border-border/60 bg-muted/25 px-4 py-4 text-center">
                       <p className="text-xs uppercase text-muted-foreground">
                         Score
                       </p>
@@ -1085,21 +1157,12 @@ export default function Receiver() {
                     </div>
                   </div>
 
-                  <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
-                    <div className="relative h-8 overflow-hidden rounded-full bg-muted">
+                  <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                    <div className="relative h-10 overflow-hidden rounded-full bg-muted">
                       <div className="absolute inset-0 bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_22%,#22c55e_50%,#f59e0b_78%,#ef4444_100%)]" />
+                      <div className="absolute inset-y-[-10px] left-1/2 w-1 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.7),0_0_20px_rgba(255,255,255,0.45)]" />
                       <div
-                        className="absolute inset-y-0 right-0 bg-background/85"
-                        style={{
-                          width: `${Math.max(
-                            0,
-                            (1 - colorChallengeProgress.t) * 100
-                          )}%`,
-                        }}
-                      />
-                      <div className="absolute inset-y-[-6px] left-1/2 w-1 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.7),0_0_16px_rgba(255,255,255,0.45)]" />
-                      <div
-                        className="absolute inset-y-[-2px] w-4 -translate-x-1/2 rounded-full border border-background/70 bg-background shadow-[0_0_18px_rgba(255,255,255,0.35)]"
+                        className="absolute top-1/2 h-7 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-background/70 bg-background shadow-[0_0_24px_rgba(255,255,255,0.35)]"
                         style={{
                           left: `${colorChallengeProgress.t * 100}%`,
                         }}
@@ -1128,7 +1191,7 @@ export default function Receiver() {
                           key={`${choice.colorId}-${index}`}
                           type="button"
                           size="lg"
-                          className="h-auto min-h-20 justify-start rounded-lg px-4 py-4 text-left text-base whitespace-normal"
+                          className="h-auto min-h-24 justify-start rounded-xl px-4 py-4 text-left text-base whitespace-normal"
                           style={{
                             backgroundColor: choice.color,
                             color: "#0a0a0a",
@@ -1140,7 +1203,14 @@ export default function Receiver() {
                           }
                           onClick={() => handleColorChallengeChoice(index)}
                         >
-                          {choice.label}
+                          <span className="flex flex-col items-start gap-1">
+                            <span className="text-base font-semibold">
+                              {choice.label}
+                            </span>
+                            <span className="text-xs opacity-75">
+                              {choice.trackLabel ?? "No track linked"}
+                            </span>
+                          </span>
                         </Button>
                       ))}
                     </div>
@@ -1440,9 +1510,8 @@ export default function Receiver() {
                       track={track}
                       economy={economy}
                       disabled={
-                        economy.gameOver ||
-                        !economy.enabled ||
-                        voteInteractionLocked
+                        voteInteractionLocked ||
+                        (economy.enabled && economy.gameOver)
                       }
                       activeVolumeTrackId={activeVolumeTrackId}
                       onPlayToggle={handlePlayToggle}
@@ -1622,6 +1691,7 @@ function ReceiverTrackCard({
   );
   const markerActive = pulseFlashActive || fillFlashActive;
   const trackCost = calculateTrackCost(track, economy);
+  const requiresEconomyCost = economy.enabled;
   const playProgress = resolveTrackPlayProgress(track, economy, nowMs);
   const displayedProgress = track.playing ? playProgress : fillProgress;
   const canPlay =
@@ -1631,7 +1701,7 @@ function ReceiverTrackCard({
     track.durationSeconds > 0 &&
     track.enabled &&
     track.playable &&
-    trackCost !== null &&
+    (!requiresEconomyCost || trackCost !== null) &&
     (!economy.currentTrackId || economy.currentTrackId === track.trackId);
 
   return (
@@ -1676,13 +1746,15 @@ function ReceiverTrackCard({
             </Badge>
           </div>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400">
-            <span className="inline-flex items-center gap-1">
-              <Coins className="size-3" />
-              Cost {trackCost === null ? "--" : trackCost.toFixed(1)}s
-            </span>
+            {economy.enabled ? (
+              <span className="inline-flex items-center gap-1">
+                <Coins className="size-3" />
+                Cost {trackCost === null ? "--" : trackCost.toFixed(1)}s
+              </span>
+            ) : null}
             <span className="truncate">{track.categoryId}</span>
             {!track.playable || !track.enabled ? (
-              <span className="text-red-300">Disabled</span>
+              <span className="text-red-300">Unavailable</span>
             ) : null}
           </div>
           <Progress value={displayedProgress} className="mt-2 h-2" />

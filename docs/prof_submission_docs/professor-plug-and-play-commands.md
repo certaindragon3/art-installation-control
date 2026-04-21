@@ -436,8 +436,13 @@ NatureSounds/LightRain.mp3  -> LightRain.mp3__2
 ### Student Playback Economy
 
 Formal student playback now uses `request_track_play` / `request_track_stop`.
-The server checks receiver currency, track duration, inflation, vote lock, and
-game-over state before turning audio on.
+The server checks receiver currency, track pricing, inflation, vote lock, and
+game-over state before turning audio on. Economy is disabled by default, so the
+professor/operator must enable it first. Runtime pricing is
+`track.basePrice * inflation`; older tracks without an explicit `basePrice`
+currently fall back to `durationSeconds`. After enablement, the shipped defaults
+use slow idle earnings plus compounding inflation so a receiver naturally
+becomes unable to afford playback after roughly 3 minutes.
 
 Let `screen-a` request `track_01`:
 
@@ -490,10 +495,11 @@ curl -X POST "$BASE_URL/api/controller/command" \
     "payload": {
       "module": "economy",
       "patch": {
+        "enabled": true,
         "startingSeconds": 30,
         "currencySeconds": 30,
-        "earnRatePerSecond": 1,
-        "inflationGrowthPerSecond": 0.02,
+        "earnRatePerSecond": 0.25,
+        "inflationGrowthPerSecond": 0.025,
         "inflationGrowsWhilePlaying": true
       }
     }
@@ -693,6 +699,9 @@ curl -X POST "$BASE_URL/api/controller/command" \
     "payload": {}
   }'
 ```
+
+After reset, receivers return to the initial state with no tracks visible.
+If you want students to see tracks again, send `set_visible_tracks` explicitly.
 
 ## 13. Suggested Quick Test Order
 

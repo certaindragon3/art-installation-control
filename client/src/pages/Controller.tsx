@@ -1817,9 +1817,10 @@ export default function Controller() {
                       Sound Economy
                     </CardTitle>
                     <CardDescription>
-                      Receiver-led playback uses seconds as currency. Reset
-                      revives a game-over receiver without changing the visible
-                      track list.
+                      Receiver-led playback uses seconds as currency. Economy
+                      stays off until you enable it for the selected receiver.
+                      Reset revives a game-over receiver without changing the
+                      visible track list.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
@@ -1866,7 +1867,7 @@ export default function Controller() {
                           </FieldDescription>
                         </FieldContent>
                         <Switch
-                          checked={selectedEconomy?.enabled ?? true}
+                          checked={selectedEconomy?.enabled ?? false}
                           onCheckedChange={checked =>
                             patchEconomy({ enabled: checked })
                           }
@@ -1891,8 +1892,8 @@ export default function Controller() {
                         <FieldContent>
                           <NumericInput
                             min={0}
-                            step={0.1}
-                            value={selectedEconomy?.earnRatePerSecond ?? 1}
+                            step={0.05}
+                            value={selectedEconomy?.earnRatePerSecond ?? 0.25}
                             onValueChange={value =>
                               patchEconomy({ earnRatePerSecond: value })
                             }
@@ -1905,9 +1906,9 @@ export default function Controller() {
                         <FieldContent>
                           <NumericInput
                             min={0}
-                            step={0.01}
+                            step={0.005}
                             value={
-                              selectedEconomy?.inflationGrowthPerSecond ?? 0.02
+                              selectedEconomy?.inflationGrowthPerSecond ?? 0.025
                             }
                             onValueChange={value =>
                               patchEconomy({
@@ -1922,7 +1923,7 @@ export default function Controller() {
                         <FieldContent>
                           <FieldLabel>Inflation Grows While Playing</FieldLabel>
                           <FieldDescription>
-                            Matches the professor SoundEconomy default.
+                            Keep compounding inflation active during playback.
                           </FieldDescription>
                         </FieldContent>
                         <Switch
@@ -3200,7 +3201,8 @@ export default function Controller() {
                                   {track.label}
                                 </FieldLabel>
                                 <FieldDescription>
-                                  {track.trackId} ·{" "}
+                                  {track.trackId} · base{" "}
+                                  {track.basePrice.toFixed(1)}s ·{" "}
                                   {track.durationSeconds.toFixed(1)}s ·{" "}
                                   {track.categoryId} ·{" "}
                                   {track.url || "No audio URL"}

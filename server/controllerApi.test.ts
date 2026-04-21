@@ -567,7 +567,7 @@ describe("controller HTTP API", () => {
       configVersion: number;
       config: {
         visuals: { iconColor: string };
-        tracks: Array<{ trackId: string; playing: boolean }>;
+        tracks: Array<{ trackId: string; visible: boolean; playing: boolean }>;
       };
     }>(receiver, WS_EVENTS.RECEIVER_STATE_UPDATE);
 
@@ -596,10 +596,12 @@ describe("controller HTTP API", () => {
         tracks: expect.arrayContaining([
           expect.objectContaining({
             trackId: "track_01",
+            visible: false,
             playing: false,
           }),
           expect.objectContaining({
             trackId: "Accident1.mp3",
+            visible: false,
             playing: false,
           }),
         ]),
@@ -837,6 +839,7 @@ describe("controller HTTP API", () => {
         groups: Array<unknown>;
         tracks: Array<{
           trackId: string;
+          visible: boolean;
           loopEnabled: boolean;
           loopControlVisible: boolean;
           loopControlLocked: boolean;
@@ -867,6 +870,7 @@ describe("controller HTTP API", () => {
         tracks: expect.arrayContaining([
           expect.objectContaining({
             trackId: "track_01",
+            visible: false,
             loopEnabled: false,
             loopControlVisible: true,
             loopControlLocked: false,
@@ -1628,6 +1632,29 @@ describe("controller HTTP API", () => {
     });
     await initialStatePromise;
 
+    const visibleTracksPromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const visibleTracksResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_visible_tracks",
+          targetId: "economy-a",
+          payload: {
+            trackIds: ["track_01"],
+          },
+        }),
+      }
+    );
+    expect(visibleTracksResponse.status).toBe(200);
+    await visibleTracksPromise;
+
     const track = DEFAULT_TRACK_LIBRARY.find(
       candidate => candidate.trackId === "track_01"
     );
@@ -1650,6 +1677,7 @@ describe("controller HTTP API", () => {
           payload: {
             module: "economy",
             patch: {
+              enabled: true,
               currencySeconds: track!.durationSeconds,
               inflation: 1,
               gameOver: false,
@@ -1711,6 +1739,29 @@ describe("controller HTTP API", () => {
     });
     await initialStatePromise;
 
+    const visibleTracksPromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    const visibleTracksResponse = await fetch(
+      `${baseUrl}/api/controller/command`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "set_visible_tracks",
+          targetId: "economy-b",
+          payload: {
+            trackIds: ["track_01"],
+          },
+        }),
+      }
+    );
+    expect(visibleTracksResponse.status).toBe(200);
+    await visibleTracksPromise;
+
     const economyPatchedPromise = waitForEvent(
       receiver,
       WS_EVENTS.RECEIVER_STATE_UPDATE
@@ -1726,6 +1777,7 @@ describe("controller HTTP API", () => {
         payload: {
           module: "economy",
           patch: {
+            enabled: true,
             currencySeconds: 0,
             inflation: 1,
           },

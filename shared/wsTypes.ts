@@ -60,6 +60,7 @@ export interface TrackState extends VisibilityConfig {
   trackId: string;
   label: string;
   url: string;
+  basePrice: number;
   durationSeconds: number;
   categoryId: string;
   categoryColor: string;
@@ -880,6 +881,7 @@ export interface TrackDefinition {
   trackId: string;
   label: string;
   url: string;
+  basePrice?: number;
   durationSeconds: number;
   categoryId: string;
   categoryColor: string;
@@ -901,13 +903,13 @@ export function createDefaultEconomyConfig(
 ): EconomyConfig {
   return {
     visible: true,
-    enabled: true,
+    enabled: false,
     currencySeconds: 30,
     startingSeconds: 30,
-    earnRatePerSecond: 1,
+    earnRatePerSecond: 0.25,
     refreshIntervalMs: 30_000,
     inflation: 1,
-    inflationGrowthPerSecond: 0.02,
+    inflationGrowthPerSecond: 0.025,
     inflationGrowsWhilePlaying: true,
     currentTrackId: null,
     playStartedAt: null,
@@ -916,6 +918,26 @@ export function createDefaultEconomyConfig(
     lastUpdatedAt: nowIso,
     lastError: null,
   };
+}
+
+export function advanceEconomyInflation(
+  inflation: number,
+  inflationGrowthPerSecond: number,
+  elapsedSeconds: number
+) {
+  const safeInflation = Math.max(0, inflation);
+  const safeGrowthRate = Math.max(0, inflationGrowthPerSecond);
+  const safeElapsedSeconds = Math.max(0, elapsedSeconds);
+
+  if (
+    safeInflation === 0 ||
+    safeGrowthRate === 0 ||
+    safeElapsedSeconds === 0
+  ) {
+    return safeInflation;
+  }
+
+  return safeInflation * Math.exp(safeGrowthRate * safeElapsedSeconds);
 }
 
 export function createDefaultColorChallengeConfig(): ColorChallengeConfig {
@@ -944,20 +966,29 @@ export function createDefaultColorChallengeConfig(): ColorChallengeConfig {
 }
 
 export function calculateTrackCost(
-  track: Pick<TrackState, "durationSeconds">,
+  track: Pick<TrackState, "basePrice" | "durationSeconds">,
   economy: Pick<EconomyConfig, "inflation">
 ) {
-  if (!Number.isFinite(track.durationSeconds) || track.durationSeconds <= 0) {
+  const resolvedBasePrice =
+    Number.isFinite(track.basePrice) && track.basePrice > 0
+      ? track.basePrice
+      : track.durationSeconds;
+
+  if (!Number.isFinite(resolvedBasePrice) || resolvedBasePrice <= 0) {
     return null;
   }
 
-  return track.durationSeconds * Math.max(0, economy.inflation);
+  return resolvedBasePrice * Math.max(0, economy.inflation);
 }
 
 export function createDefaultTracks(): TrackState[] {
   return DEFAULT_TRACK_LIBRARY.map(track => ({
     ...track,
-    visible: true,
+    basePrice:
+      typeof track.basePrice === "number" && Number.isFinite(track.basePrice)
+        ? Math.max(0, track.basePrice)
+        : Math.max(0, track.durationSeconds),
+    visible: false,
     enabled: true,
     playing: false,
     playable: true,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AUDIO_URLS,
+  advanceEconomyInflation,
+  calculateTrackCost,
   CONFIG_TTL_MS,
   createDefaultReceiverConfig,
   DEFAULT_TRACK_LIBRARY,
@@ -34,9 +36,11 @@ describe("Phase 1 shared protocol", () => {
         expect.objectContaining({
           trackId: "track_01",
           label: "Boing",
+          basePrice: expect.any(Number),
           durationSeconds: expect.any(Number),
           categoryId: "root",
           categoryColor: expect.any(String),
+          visible: false,
           playing: false,
           playable: true,
           loopEnabled: false,
@@ -51,6 +55,7 @@ describe("Phase 1 shared protocol", () => {
         expect.objectContaining({
           trackId: "track_02",
           label: "Womp Womp",
+          visible: false,
         }),
         expect.objectContaining({
           trackId: "Accident1.mp3",
@@ -59,11 +64,13 @@ describe("Phase 1 shared protocol", () => {
           durationSeconds: expect.any(Number),
           categoryId: "CitySounds",
           categoryColor: expect.any(String),
+          visible: false,
         }),
         expect.objectContaining({
           trackId: "LightRain.mp3__2",
           label: "LightRain",
           url: "/audio/NatureSounds/LightRain.mp3",
+          visible: false,
         }),
       ])
     );
@@ -100,12 +107,12 @@ describe("Phase 1 shared protocol", () => {
     });
     expect(config.economy).toMatchObject({
       visible: true,
-      enabled: true,
+      enabled: false,
       currencySeconds: 30,
       startingSeconds: 30,
-      earnRatePerSecond: 1,
+      earnRatePerSecond: 0.25,
       inflation: 1,
-      inflationGrowthPerSecond: 0.02,
+      inflationGrowthPerSecond: 0.025,
       inflationGrowsWhilePlaying: true,
       currentTrackId: null,
       gameOver: false,
@@ -137,6 +144,46 @@ describe("Phase 1 shared protocol", () => {
       enabled: true,
       text: "",
     });
+  });
+
+  it("compounds inflation over elapsed time", () => {
+    expect(advanceEconomyInflation(1, 0.025, 60)).toBeCloseTo(
+      Math.exp(1.5),
+      6
+    );
+    expect(advanceEconomyInflation(4, 0, 60)).toBe(4);
+    expect(advanceEconomyInflation(0, 0.025, 60)).toBe(0);
+  });
+
+  it("makes the default economy unaffordable within three idle minutes", () => {
+    const economy = createDefaultReceiverConfig().economy;
+    const idleSeconds = 180;
+    const currencyAfterIdle =
+      economy.currencySeconds + economy.earnRatePerSecond * idleSeconds;
+    const inflationAfterIdle = advanceEconomyInflation(
+      economy.inflation,
+      economy.inflationGrowthPerSecond,
+      idleSeconds
+    );
+    const cheapestTrackCost = Math.min(
+      ...DEFAULT_TRACK_LIBRARY.map(track =>
+        calculateTrackCost(track, { inflation: inflationAfterIdle }) ?? Infinity
+      )
+    );
+
+    expect(cheapestTrackCost).toBeGreaterThan(currencyAfterIdle);
+  });
+
+  it("prices tracks from basePrice before applying inflation", () => {
+    expect(
+      calculateTrackCost({ basePrice: 12, durationSeconds: 3 }, { inflation: 2 })
+    ).toBe(24);
+    expect(
+      calculateTrackCost(
+        { basePrice: Number.NaN, durationSeconds: 3 },
+        { inflation: 2 }
+      )
+    ).toBe(6);
   });
 
   it("keeps the shipped audio assets addressable through dynamic track ids", () => {

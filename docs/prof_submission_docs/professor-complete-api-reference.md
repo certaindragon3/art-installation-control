@@ -244,6 +244,7 @@ Example:
     "patch": {
       "visible": true,
       "enabled": true,
+      "basePrice": 3.7,
       "playable": true,
       "playing": false,
       "groupId": "group_rhythm",
@@ -261,6 +262,7 @@ Example:
 ```
 
 Behavior:
+- `basePrice` clamps to `>= 0`.
 - `volumeValue` clamps to `0..1`.
 - `fillTime` clamps to `>= 0`.
 - `playable: false` immediately forces `playing: false`.
@@ -563,13 +565,13 @@ Example:
     "module": "economy",
     "patch": {
       "visible": true,
-      "enabled": true,
+      "enabled": false,
       "startingSeconds": 30,
       "currencySeconds": 30,
-      "earnRatePerSecond": 1,
+      "earnRatePerSecond": 0.25,
       "refreshIntervalMs": 30000,
       "inflation": 1,
-      "inflationGrowthPerSecond": 0.02,
+      "inflationGrowthPerSecond": 0.025,
       "inflationGrowsWhilePlaying": true,
       "gameOver": false,
       "lastError": null
@@ -583,7 +585,10 @@ Behavior:
 - `refreshIntervalMs` clamps to `>= 1000`.
 - `enabled: false` stops all tracks.
 - `gameOver: true` stops all tracks.
-- Cost is `track.durationSeconds * economy.inflation`.
+- Inflation compounds from the current multiplier over elapsed real time.
+- Economy stays off until you explicitly set `enabled: true`.
+- Cost is `track.basePrice * economy.inflation`.
+- If a track does not define `basePrice`, the current runtime falls back to `durationSeconds` for backward compatibility.
 
 #### `module: "colorChallenge"`
 
@@ -741,6 +746,7 @@ Example:
 
 Behavior:
 - Resets tracks, groups, pulse, vote, score, map, timing, text, visuals, economy, and color challenge to defaults.
+- All tracks return to the default hidden state (`visible: false`) after reset. Reset is not equivalent to `Show All`.
 - Economy is live-authoritative, so `currencySeconds` and `inflation` may already have advanced slightly by the time the next snapshot is serialized.
 
 ### 11. `request_track_play`
@@ -782,6 +788,10 @@ Typical failure values for `economy.lastError`:
 - `track_disabled`
 - `already_playing`
 - `insufficient_currency`
+
+Default tuning note:
+- The shipped defaults keep economy disabled until the professor/operator enables it.
+- After enablement, the default idle earnings and compounding inflation still make even the cheapest track unaffordable at about 3 minutes.
 
 ### 12. `request_track_stop`
 

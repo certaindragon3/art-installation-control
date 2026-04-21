@@ -49,13 +49,14 @@ Post-closeout cleanup:
 
 ### Track Snapshot Metadata
 
-Track state now includes manifest-derived metadata used by the economy flow:
+Track state now includes metadata used by the economy flow:
 
 ```typescript
 interface TrackState {
   trackId: string;
   label: string;
   url: string;
+  basePrice: number;
   durationSeconds: number;
   categoryId: string;
   categoryColor: string;
@@ -74,7 +75,11 @@ This metadata appears in:
 - Socket.IO `receiver_state_update`
 - Socket.IO `receiver_list`
 
-Cost is computed from `durationSeconds * economy.inflation`.
+`basePrice` is the economy pricing baseline. When older track seeds do not
+define it explicitly, the runtime currently falls back to `durationSeconds` for
+backward compatibility.
+
+Cost is computed from `basePrice * economy.inflation`.
 
 ### Receiver Economy State
 
@@ -104,13 +109,15 @@ Default behavior:
 
 - `startingSeconds = 30`
 - `currencySeconds = 30`
-- `earnRatePerSecond = 1`
+- `earnRatePerSecond = 0.25`
 - `refreshIntervalMs = 30000`
 - `inflation = 1`
-- `inflationGrowthPerSecond = 0.02`
+- `inflationGrowthPerSecond = 0.025`
 - `inflationGrowsWhilePlaying = true`
+- `enabled = false`
 - Currency grows only while idle / silent.
-- Inflation grows over time and, by default, also grows while playing.
+- Inflation compounds over time and, by default, also compounds while playing.
+- With shipped defaults, roughly 3 minutes of idle time is enough to make even the cheapest track unaffordable.
 - Game over disables receiver track operation.
 
 ### HTTP / Socket.IO Command: `request_track_play`
@@ -145,7 +152,7 @@ Server checks:
 - Track has a URL and positive `durationSeconds`.
 - Track is enabled and playable.
 - No other track is currently playing.
-- `currencySeconds - durationSeconds * inflation >= 0`.
+- `currencySeconds - basePrice * inflation >= 0`.
 
 On success:
 
@@ -228,13 +235,13 @@ Controller / Unity can tune economy values through the existing unified command 
     "module": "economy",
     "patch": {
       "visible": true,
-      "enabled": true,
+      "enabled": false,
       "startingSeconds": 30,
       "currencySeconds": 30,
-      "earnRatePerSecond": 1,
+      "earnRatePerSecond": 0.25,
       "refreshIntervalMs": 30000,
       "inflation": 1,
-      "inflationGrowthPerSecond": 0.02,
+      "inflationGrowthPerSecond": 0.025,
       "inflationGrowsWhilePlaying": true,
       "gameOver": false,
       "lastError": null

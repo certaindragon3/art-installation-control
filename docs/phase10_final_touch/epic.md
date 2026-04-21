@@ -103,10 +103,10 @@ interface EconomyConfig {
   enabled: boolean;
   currencySeconds: number;
   startingSeconds: number; // default 30
-  earnRatePerSecond: number; // default 1
+  earnRatePerSecond: number; // default 0.25
   refreshIntervalMs: number; // default 30000
   inflation: number; // default 1
-  inflationGrowthPerSecond: number; // default 0.02
+  inflationGrowthPerSecond: number; // default 0.025
   inflationGrowsWhilePlaying: boolean; // default true
   currentTrackId: string | null;
   playStartedAt: string | null;
@@ -119,11 +119,13 @@ interface EconomyConfig {
 默认行为沿用教授 C#：
 
 - Receiver 注册后获得 `startingSeconds = 30`。
-- Idle / silence 时 currency 按 `1 second per real second` 增长。
+- Economy 默认 `enabled = false`，教授显式开启后才进入正式 economy flow。
+- Idle / silence 时 currency 按 `0.25 second per real second` 增长。
 - Playing 时 currency 不增长。
-- Inflation 从 `1` 开始，以 `0.02 per second` 增长。
+- Inflation 从 `1` 开始，以 `0.025` 的秒级复利增长。
 - `inflationGrowsWhilePlaying = true`，播放时 inflation 也增长。
-- Cost = `durationSeconds * inflation`。
+- Cost = `basePrice * inflation`；若未配置 `basePrice`，runtime 可兼容回退到 `durationSeconds`。
+- 目标调参是让默认配置在约 3 分钟内进入“等待也买不起任何 track”的破产区间。
 - Currency 不足时 receiver game over。
 
 Server 用 lazy evaluation 更新 currency / inflation：在收到命令、请求 snapshot、播放结束、定时清理等边界计算经过时间，不需要每帧 tick。

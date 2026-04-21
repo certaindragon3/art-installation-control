@@ -56,7 +56,7 @@ UI 要求：
 
 ## D4 Track Cost Source
 
-**Decision: 自动从 manifest / generator 写入 `durationSeconds`，减少手工维护。**
+**Decision: 自动从 manifest / generator 写入 `durationSeconds`，并允许每条 track 配置独立 `basePrice`。**
 
 不要让你手动填 120 个 duration，也不要依赖浏览器把 duration 回传给 server。
 
@@ -65,12 +65,13 @@ UI 要求：
 - Audio manifest generator 扫描音频文件。
 - 尽量自动读取每个文件的 duration。
 - 生成 `durationSeconds` 到 `trackManifest.generated.ts` 或等价 manifest。
+- 若教授后续给出明确定价，可按 track 写入 `basePrice`；未写入时 runtime 可回退到 `durationSeconds`。
 - 若某个文件 duration 读取失败，生成器报 warning，并给出需要人工处理的文件列表。
 
 Fallback：
 
 - 单条 track 可允许 overrides 文件修正 duration。
-- 没有 duration 的 track 不应进入 economy play flow，除非显式使用保守 fallback cost。
+- 没有 duration 的 track 不应进入 economy play flow。
 
 ## D5 Currency Growth And Inflation
 
@@ -79,18 +80,21 @@ Fallback：
 默认参数：
 
 - `startingSeconds = 30`
-- `earnRatePerSecond = 1`
+- `earnRatePerSecond = 0.25`
 - `refreshInterval = 30s`
 - `inflationStart = 1`
-- `inflationGrowthPerSecond = 0.02`
+- `inflationGrowthPerSecond = 0.025`
 - `inflationGrowsWhilePlaying = true`
+- `enabled = false` by default
 
 行为：
 
 - Silence / idle 时 currency 增长。
 - Playing 时 currency 不增长。
-- Inflation 默认一直增长，包括播放时。
-- Cost = track duration seconds * current inflation。
+- Inflation 默认按复利一直增长，包括播放时。
+- Economy 默认关闭；教授显式 enable 后才进入正式 economy flow。
+- Cost = `track.basePrice * current inflation`；若 track 没有显式 `basePrice`，runtime 可兼容回退到 `durationSeconds`。
+- 调参目标是默认配置在约 3 分钟内让 receiver 连最便宜的 track 也买不起。
 - 播放结束后刷新 visible/offered track UI 状态，但 Phase 10 不做随机 slots。
 
 ## D6 Game Over

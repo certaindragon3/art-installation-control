@@ -56,7 +56,7 @@ Receiver IDs used:
 | Voting | Receiver vote submit | Receiver clicked `Alpha`; snapshot stored `selectedOptionId: "alpha"` and `submittedAt`. |
 | Voting export | `GET /api/controller/votes/export` | Export showed `submittedCount: 1`, `totalEligible: 1`, `missingReceiverIds: []`, and `Alpha.voteCount: 1`. |
 | Voting reset | `vote_reset_all` | Cleared `selectedOptionId` back to `null` without removing the question. |
-| Economy config | `set_module_state(module=economy)` | Negative `earnRatePerSecond` and `inflationGrowthPerSecond` clamped to `0`; `refreshIntervalMs: 500` clamped to `1000`. |
+| Economy config | `set_module_state(module=economy)` | Negative `earnRatePerSecond` and `inflationGrowthPerSecond` clamped to `0`; `refreshIntervalMs: 500` clamped to `1000`; economy remained inactive until `enabled: true` was sent. |
 | Economy play | `request_track_play` | After restoring `track_01.playable = true`, play succeeded with `currentTrackId: "track_01"`, populated `playStartedAt` / `playEndsAt`, and `currencySeconds` dropped from `10` to `6.317`. |
 | Economy stop | `request_track_stop` | Cleared `currentTrackId`, `playStartedAt`, and `playEndsAt`; `track_01.playing` became `false`. |
 | Economy failure | `request_track_play` with `currencySeconds: 0` and `inflation: 100` | Entered `gameOver: true` with `lastError: "insufficient_currency"`. |
@@ -71,5 +71,5 @@ Receiver IDs used:
 ## Notes From Validation
 
 - `request_track_play` checks track state before economy cost. During testing, a previous legacy `audio_playable` command left `track_01.playable = false`, which correctly caused `lastError: "track_disabled"` until the track was re-enabled.
-- `reset_all_state` restores economy defaults, but subsequent serialized snapshots can already show slightly advanced `currencySeconds` and `inflation` because the economy state is live and time-based.
+- `reset_all_state` restores economy defaults, including `enabled: false`. Subsequent serialized snapshots can already show slightly advanced `currencySeconds` and `inflation` after re-enable because the economy state is live and time-based.
 - No Phase 7 optional API was exercised because that phase remains intentionally deferred.

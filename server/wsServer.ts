@@ -7,6 +7,7 @@ import {
   type PulseScheduler,
 } from "./pulseScheduler";
 import {
+  advanceEconomyInflation,
   assignColorChallengeRound,
   calculateTrackCost,
   clamp01,
@@ -745,7 +746,11 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
   if (elapsedSeconds > 0) {
     if (playing) {
       if (economy.inflationGrowsWhilePlaying) {
-        economy.inflation += economy.inflationGrowthPerSecond * elapsedSeconds;
+        economy.inflation = advanceEconomyInflation(
+          economy.inflation,
+          economy.inflationGrowthPerSecond,
+          elapsedSeconds
+        );
       }
     } else if (
       economy.currentTrackId &&
@@ -758,12 +763,17 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
       );
       const idleElapsedSeconds = Math.max(0, (now - playEndsAtMs) / 1000);
       if (economy.inflationGrowsWhilePlaying) {
-        economy.inflation +=
-          economy.inflationGrowthPerSecond *
-          (playingElapsedSeconds + idleElapsedSeconds);
+        economy.inflation = advanceEconomyInflation(
+          economy.inflation,
+          economy.inflationGrowthPerSecond,
+          playingElapsedSeconds + idleElapsedSeconds
+        );
       } else {
-        economy.inflation +=
-          economy.inflationGrowthPerSecond * idleElapsedSeconds;
+        economy.inflation = advanceEconomyInflation(
+          economy.inflation,
+          economy.inflationGrowthPerSecond,
+          idleElapsedSeconds
+        );
       }
       economy.currencySeconds += economy.earnRatePerSecond * idleElapsedSeconds;
       const endingTrack = getTrack(state, economy.currentTrackId);
@@ -775,7 +785,11 @@ function advanceEconomy(state: InternalReceiverState, now = Date.now()) {
       economy.playEndsAt = null;
     } else {
       economy.currencySeconds += economy.earnRatePerSecond * elapsedSeconds;
-      economy.inflation += economy.inflationGrowthPerSecond * elapsedSeconds;
+      economy.inflation = advanceEconomyInflation(
+        economy.inflation,
+        economy.inflationGrowthPerSecond,
+        elapsedSeconds
+      );
     }
   }
 
@@ -1458,15 +1472,15 @@ function createTrackFromPatch(
   trackId: string,
   patch: Partial<TrackState>
 ): TrackState {
+  const durationSeconds = clampNonNegativeNumber(patch.durationSeconds, 0);
+  const basePrice = clampNonNegativeNumber(patch.basePrice, durationSeconds);
+
   return {
     trackId,
     label: typeof patch.label === "string" ? patch.label : trackId,
     url: typeof patch.url === "string" ? patch.url : "",
-    durationSeconds:
-      typeof patch.durationSeconds === "number" &&
-      Number.isFinite(patch.durationSeconds)
-        ? Math.max(0, patch.durationSeconds)
-        : 0,
+    basePrice,
+    durationSeconds,
     categoryId:
       typeof patch.categoryId === "string" && patch.categoryId.trim()
         ? patch.categoryId.trim()
@@ -1597,7 +1611,14 @@ function applyTrackPatch(
     if (existing.playable === false) {
       existing.playing = false;
     }
-    existing.durationSeconds = Math.max(0, existing.durationSeconds);
+    existing.durationSeconds = clampNonNegativeNumber(
+      existing.durationSeconds,
+      0
+    );
+    existing.basePrice = clampNonNegativeNumber(
+      existing.basePrice,
+      existing.durationSeconds
+    );
     if (!existing.categoryId.trim()) {
       existing.categoryId = MANUAL_TRACK_CATEGORY_ID;
     }

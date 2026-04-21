@@ -28,6 +28,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { cn } from "@/lib/utils";
 import { volumeValueToGain, volumeValueToPercent } from "@shared/audio";
 import {
+  advanceEconomyInflation,
   assignColorChallengeRound,
   clampNormalizedCoordinate,
   calculateTrackCost,
@@ -144,10 +145,13 @@ function resolveEconomyDisplay(economy: EconomyConfig, nowMs: number) {
       ? economy.currencySeconds
       : economy.currencySeconds + economy.earnRatePerSecond * elapsedSeconds,
     inflation:
-      economy.inflation +
-      (economy.inflationGrowsWhilePlaying || !playing
-        ? economy.inflationGrowthPerSecond * elapsedSeconds
-        : 0),
+      economy.inflationGrowsWhilePlaying || !playing
+        ? advanceEconomyInflation(
+            economy.inflation,
+            economy.inflationGrowthPerSecond,
+            elapsedSeconds
+          )
+        : economy.inflation,
   };
 }
 
@@ -1600,6 +1604,8 @@ function ReceiverTrackCard({
   const canPlay =
     !disabled &&
     track.visible &&
+    Boolean(track.url) &&
+    track.durationSeconds > 0 &&
     track.enabled &&
     track.playable &&
     trackCost !== null &&

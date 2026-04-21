@@ -175,6 +175,22 @@ function resolveTrackPlayProgress(
   return Math.min(100, Math.max(0, ((nowMs - startedAt) / durationMs) * 100));
 }
 
+function resolveEconomyStateLabel(economy: EconomyConfig) {
+  if (economy.gameOver) {
+    return "Game Over";
+  }
+
+  if (!economy.enabled) {
+    return "Disabled";
+  }
+
+  if (economy.currentTrackId) {
+    return "Playing";
+  }
+
+  return "Ready";
+}
+
 function resolveMapDisplayPosition(map: MapConfig, nowMs: number) {
   const movement = map.movement;
   if (!movement) {
@@ -258,6 +274,10 @@ export default function Receiver() {
   const economy = useMemo(
     () => resolveEconomyDisplay(config.economy, nowMs),
     [config.economy, nowMs]
+  );
+  const economyStateLabel = useMemo(
+    () => resolveEconomyStateLabel(economy),
+    [economy]
   );
   const colorChallenge = optimisticColorChallenge ?? config.colorChallenge;
   const colorChallengeProgress = useMemo(
@@ -867,28 +887,31 @@ export default function Receiver() {
                 }}
               />
             </div>
-            <div className="mt-4 grid w-full max-w-sm grid-cols-3 gap-2">
-              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
-                <p className="text-[10px] uppercase text-zinc-400">Pool</p>
-                <p className="text-lg font-semibold">
-                  {economy.currencySeconds.toFixed(1)}s
-                </p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
-                <p className="text-[10px] uppercase text-zinc-400">Cost x</p>
-                <p className="text-lg font-semibold">
-                  {economy.inflation.toFixed(2)}
-                </p>
-              </div>
+            <div
+              className={cn(
+                "mt-4 grid w-full max-w-sm gap-2",
+                economy.enabled ? "grid-cols-3" : "grid-cols-1"
+              )}
+            >
+              {economy.enabled ? (
+                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                  <p className="text-[10px] uppercase text-zinc-400">Pool</p>
+                  <p className="text-lg font-semibold">
+                    {economy.currencySeconds.toFixed(1)}s
+                  </p>
+                </div>
+              ) : null}
+              {economy.enabled ? (
+                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
+                  <p className="text-[10px] uppercase text-zinc-400">Cost x</p>
+                  <p className="text-lg font-semibold">
+                    {economy.inflation.toFixed(2)}
+                  </p>
+                </div>
+              ) : null}
               <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-center">
                 <p className="text-[10px] uppercase text-zinc-400">State</p>
-                <p className="truncate text-lg font-semibold">
-                  {economy.gameOver
-                    ? "Game Over"
-                    : economy.currentTrackId
-                      ? "Playing"
-                      : "Ready"}
-                </p>
+                <p className="truncate text-lg font-semibold">{economyStateLabel}</p>
               </div>
             </div>
             {economy.lastError ? (

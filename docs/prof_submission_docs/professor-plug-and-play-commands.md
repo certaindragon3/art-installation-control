@@ -2,6 +2,10 @@
 
 Short copy-paste commands for testing the current workflow without using the web controller UI.
 
+For the full tested API manual, see [Professor Unity API Reference](./professor-complete-api-reference.md).
+
+For the 2026-04-21 `agent-browser` verification record, see [Professor API Validation](./professor-api-validation.md).
+
 Polling/voting-specific payloads are in [`polling-system-payloads.md`](./polling-system-payloads.md).
 
 ## Current Note

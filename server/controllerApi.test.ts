@@ -2916,4 +2916,78 @@ describe("controller HTTP API", () => {
       error: "Receiver not found: missing-screen",
     });
   });
+
+  it("returns JSON for malformed bodies and recovers common Unity body artifacts", async () => {
+    const receiver = await connectSocket(baseUrl);
+    sockets.push(receiver);
+
+    const statePromise = waitForEvent(
+      receiver,
+      WS_EVENTS.RECEIVER_STATE_UPDATE
+    );
+    receiver.emit(WS_EVENTS.REGISTER_RECEIVER, {
+      receiverId: "screen-a",
+      label: "Main Screen",
+    });
+    await statePromise;
+
+    const recoveredCommandPromise = waitForEvent<{
+      command: string;
+      payload: { module: string; patch: { text: string } };
+    }>(receiver, WS_EVENTS.RECEIVER_COMMAND);
+    const recoveredResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body:
+        JSON.stringify({
+          command: "set_module_state",
+          targetId: "screen-a",
+          payload: {
+            module: "textDisplay",
+            patch: {
+              text: "Recovered request body",
+              visible: true,
+            },
+          },
+        }) + "\u0000",
+    });
+
+    expect(recoveredResponse.status).toBe(200);
+    await expect(recoveredCommandPromise).resolves.toMatchObject({
+      command: "set_module_state",
+      payload: {
+        module: "textDisplay",
+        patch: {
+          text: "Recovered request body",
+        },
+      },
+    });
+
+    const malformedResponse = await fetch(`${baseUrl}/api/controller/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: `{
+        "command": "set_module_state",
+        "targetId": "screen-a",
+        "payload": {
+          "module": "economy",
+          "patch": {
+            "enabled": true,
+            "lastError":
+          }
+        }
+      }`,
+    });
+
+    expect(malformedResponse.status).toBe(400);
+    await expect(malformedResponse.json()).resolves.toMatchObject({
+      ok: false,
+      error: "Malformed JSON request body",
+      details: expect.any(String),
+    });
+  });
 });

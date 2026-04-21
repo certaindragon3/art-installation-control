@@ -134,6 +134,27 @@ Error responses:
 }
 ```
 
+Unity envelope reminder:
+
+```json
+{
+  "command": "set_module_state",
+  "targetId": "screen-a",
+  "payload": {
+    "module": "economy",
+    "patch": {
+      "enabled": true,
+      "lastError": null
+    }
+  }
+}
+```
+
+- `command` is the action name such as `set_module_state`. Do not put a receiver ID or `*` in this field.
+- `targetId` is the final receiver ID such as `screen-a`, or `*` for broadcast.
+- For module updates, `payload` must contain both `module` and `patch`. Sending raw economy fields directly under `payload` is not valid.
+- If you want to clear a nullable field such as `lastError`, send JSON `null`. `lastError:` with no value after the colon is malformed JSON and the server will reject it before command validation.
+
 ### `POST /api/controller/clear-offline`
 
 Removes disconnected receivers that are still retained in memory.

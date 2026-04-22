@@ -92,6 +92,15 @@ client/public/audio/NatureSounds
 This drop contains 79 files: 40 city sounds and 39 nature sounds. Together with
 the two legacy demo files, the generated library currently has 81 tracks.
 
+An additional `Spectrum` folder has also been copied into:
+
+```bash
+client/public/audio/Spectrum
+```
+
+This folder contains 40 files. The generated library currently has 121 tracks
+total.
+
 One filename appears in both folders:
 
 ```text

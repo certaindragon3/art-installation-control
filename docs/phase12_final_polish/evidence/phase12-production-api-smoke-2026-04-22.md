@@ -72,6 +72,14 @@ Covered on production:
 
 ![Controller final](/Users/huangjiesen/大四/s4/G哥项目/art-installation-control/docs/phase12_final_polish/evidence/production-api-smoke-2026-04-22/screenshots/09-controller-final.png)
 
+10. Redeployed Unity registration response showing `https://` origin
+
+![Unity register https recheck](/Users/huangjiesen/大四/s4/G哥项目/art-installation-control/docs/phase12_final_polish/evidence/production-api-smoke-2026-04-22/screenshots/10-unity-register-https-recheck.png)
+
+11. Controller page after redeploy recheck
+
+![Controller redeploy recheck](/Users/huangjiesen/大四/s4/G哥项目/art-installation-control/docs/phase12_final_polish/evidence/production-api-smoke-2026-04-22/screenshots/11-controller-redeploy-recheck.png)
+
 ## Result Summary
 
 Production smoke passed for the main controller and receiver flows. The deployed app correctly handled:
@@ -85,7 +93,7 @@ Production smoke passed for the main controller and receiver flows. The deployed
 - Phase 12 Color Challenge linked-track round generation, submit scoring, timeout behavior, export shape, and combined scoreboard export
 - controller offline-receiver cleanup
 
-The only production issue found during smoke was the Unity registration origin described below.
+The initial production issue found during smoke was the Unity registration origin described below. It was fixed, redeployed, and rechecked later the same day.
 
 ## Key Production Checks
 
@@ -170,7 +178,7 @@ Example successful production submit result:
 }
 ```
 
-## Production Finding
+## Initial Production Finding
 
 ### `POST /api/unity/register` exported `http://` instead of `https://`
 
@@ -211,7 +219,32 @@ Result:
 
 - `25` tests passed
 
-This fix is local at the time of writing and still needs redeploy before production can claim a fully correct Unity registration origin.
+## Redeploy Recheck
+
+After the proxy-trust fix was deployed, production was rechecked with fresh live requests and browser screenshots.
+
+Live recheck results:
+
+- `GET /api/healthz` returned `{"ok":true}`
+- `POST /api/unity/register` returned `socketServerUrl: "https://artinstallation.certaindragon3.work"`
+- `GET /api/controller/receivers` returned `{"ok":true,"receivers":[]}`
+
+Confirmed live Unity registration payload:
+
+```json
+{
+  "ok": true,
+  "role": "unity",
+  "socketServerUrl": "https://artinstallation.certaindragon3.work",
+  "socketPath": "/socket.io"
+}
+```
+
+Redeploy recheck conclusion:
+
+- the reverse-proxy origin bug is resolved on production
+- the previously failing Unity registration path now matches the professor-facing API docs
+- no additional production regressions were observed in the redeploy spot-check
 
 ## Cleanup
 

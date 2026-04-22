@@ -58,12 +58,14 @@ Receiver IDs used:
 | Voting reset | `vote_reset_all` | Cleared `selectedOptionId` back to `null` without removing the question. |
 | Economy config | `set_module_state(module=economy)` | Negative `earnRatePerSecond` and `inflationGrowthPerSecond` clamped to `0`; `refreshIntervalMs: 500` clamped to `1000`; economy remained inactive until `enabled: true` was sent. |
 | Economy play | `request_track_play` | After restoring `track_01.playable = true`, play succeeded with `currentTrackId: "track_01"`, populated `playStartedAt` / `playEndsAt`, and `currencySeconds` dropped from `10` to `6.317`. |
+| Economy disabled play | `request_track_play` with `economy.enabled = false` | Allowed `track_01` playback with `currentTrackId: "track_01"` while `currencySeconds` stayed `0`; server cleared stale `gameOver` / `lastError`. |
 | Economy stop | `request_track_stop` | Cleared `currentTrackId`, `playStartedAt`, and `playEndsAt`; `track_01.playing` became `false`. |
 | Economy failure | `request_track_play` with `currencySeconds: 0` and `inflation: 100` | Entered `gameOver: true` with `lastError: "insufficient_currency"`. |
 | Economy reset | `economy_reset` | Restored `currencySeconds` to `startingSeconds`, reset `inflation` to `1`, and cleared `lastError`. |
-| Color challenge config | `set_module_state(module=colorChallenge)` | Started a round with `assignedColorId: "green"`, two visible choices, and `iterationDurationMs: 800`. |
+| Score download | `GET /api/controller/scoreboard/export` | Returned the combined economy + score snapshot with `economyRemainingSeconds`, `economyEnabled`, `scoreSystemScore`, and `scoreSystemEnabled`. |
+| Color challenge config | `set_module_state(module=colorChallenge)` | Started a round with `assignedColorId: "green"`, two track-linked choices, `iterationDurationMs: 800`, `barCycleDurationMs`, and randomized `barStartProgress`. |
 | Color challenge submit | `submit_color_challenge_choice` | Correct submission returned `reason: "correct"`, `greenness: 0.55`, `scoreDelta: 1.65`, and `score: 3.65`. |
-| Color challenge export | `GET /api/controller/color-challenge/export` | Export contained the same submission with `submissionId: "doc-submit-1"`. |
+| Color challenge export | `GET /api/controller/color-challenge/export` | Export contained the same submission with `submissionId: "doc-submit-1"` and choice-level `trackId` / `trackLabel` / `trackUrl`. |
 | Color challenge reset | `color_challenge_reset` | Restored score to `2`, left `gameOver: false`, and wrote `lastResult.reason: "reset"`. |
 | Full reset | `reset_all_state` | Cleared groups, vote, map movement, timing, text, score, and color challenge state; restored default visuals and live economy defaults. |
 | Offline cleanup | `POST /api/controller/clear-offline` | After closing the `prof-broadcast` tab, receiver showed `connected: false`; clear-offline removed it and returned `removedReceiverIds: ["prof-broadcast"]`. |
@@ -71,5 +73,6 @@ Receiver IDs used:
 ## Notes From Validation
 
 - `request_track_play` checks track state before economy cost. During testing, a previous legacy `audio_playable` command left `track_01.playable = false`, which correctly caused `lastError: "track_disabled"` until the track was re-enabled.
+- With `economy.enabled: false`, `request_track_play` still enforces track visibility / playability and vote-lock rules, but it does not deduct currency.
 - `reset_all_state` restores economy defaults, including `enabled: false`. Subsequent serialized snapshots can already show slightly advanced `currencySeconds` and `inflation` after re-enable because the economy state is live and time-based.
 - No Phase 7 optional API was exercised because that phase remains intentionally deferred.

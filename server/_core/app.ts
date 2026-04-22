@@ -85,6 +85,9 @@ export async function createApp(
   const { nodeEnv = process.env.NODE_ENV, serveFrontend = true } = options;
 
   const app = express();
+  // Respect reverse-proxy forwarded proto/host in production so exported URLs
+  // match the public origin instead of the internal HTTP hop.
+  app.set("trust proxy", true);
   const server = createServer(app);
 
   initWebSocket(server);

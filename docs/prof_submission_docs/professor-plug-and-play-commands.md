@@ -437,12 +437,13 @@ NatureSounds/LightRain.mp3  -> LightRain.mp3__2
 
 Formal student playback now uses `request_track_play` / `request_track_stop`.
 The server checks receiver currency, track pricing, inflation, vote lock, and
-game-over state before turning audio on. Economy is disabled by default, so the
-professor/operator must enable it first. Runtime pricing is
-`track.basePrice * inflation`; older tracks without an explicit `basePrice`
-currently fall back to `durationSeconds`. After enablement, the shipped defaults
-use slow idle earnings plus compounding inflation so a receiver naturally
-becomes unable to afford playback after roughly 3 minutes.
+game-over state before turning audio on when economy mode is active. Economy is
+disabled by default. In that mode the same command still works for visible,
+enabled, playable tracks, but no currency or inflation cost is applied. Runtime
+pricing is `track.basePrice * inflation`; older tracks without an explicit
+`basePrice` currently fall back to `durationSeconds`. After enablement, the
+shipped defaults use slow idle earnings plus compounding inflation so a
+receiver naturally becomes unable to afford playback after roughly 3 minutes.
 
 Let `screen-a` request `track_01`:
 
@@ -506,7 +507,24 @@ curl -X POST "$BASE_URL/api/controller/command" \
   }'
 ```
 
-Download the current score snapshot for all receivers:
+If you want costed economy mode, enable it explicitly first:
+
+```bash
+curl -X POST "$BASE_URL/api/controller/command" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "set_module_state",
+    "targetId": "screen-a",
+    "payload": {
+      "module": "economy",
+      "patch": {
+        "enabled": true
+      }
+    }
+  }'
+```
+
+Download the current combined economy + score snapshot for all receivers:
 
 ```bash
 curl "$BASE_URL/api/controller/scoreboard/export"
@@ -523,8 +541,10 @@ Response excerpt:
     "receivers": [
       {
         "receiverId": "screen-a",
+        "economyEnabled": true,
         "economyRemainingSeconds": 18.5,
         "manualScoreValue": 7,
+        "scoreSystemEnabled": true,
         "scoreSystemScore": 2.75
       }
     ]
@@ -605,7 +625,9 @@ Recommended movement example:
 
 Color Challenge is separate from the Sound Economy. It uses
 `ReceiverState.config.colorChallenge`, server-generated two-choice rounds, and
-server-authoritative score changes.
+server-authoritative score changes. In the final Phase 12 shape, each choice
+also carries linked track metadata, and the timing reward comes from a fast
+ping-pong bar that is independent from the round timeout.
 
 Enable the challenge for one receiver:
 
@@ -657,7 +679,8 @@ curl -X POST "$BASE_URL/api/controller/command" \
 ```
 
 Receiver pages submit choices automatically. For external testing, submit the
-left or right choice by index:
+left or right choice by index. First read the current `iterationId` and the
+choice `colorId` from `GET /api/controller/receivers`, then submit:
 
 ```bash
 curl -X POST "$BASE_URL/api/controller/command" \
@@ -666,10 +689,45 @@ curl -X POST "$BASE_URL/api/controller/command" \
     "command": "submit_color_challenge_choice",
     "targetId": "screen-a",
     "payload": {
+      "roundId": "<current iterationId>",
+      "submissionId": "prof-submit-1",
       "choiceIndex": 0,
-      "pressedAt": "2026-04-20T13:30:00.000Z"
+      "colorId": "<choices[0].colorId>",
+      "pressedAt": "2026-04-21T13:30:00.000Z"
     }
   }'
+```
+
+Current round snapshot excerpt:
+
+```json
+{
+  "colorChallenge": {
+    "assignedColorId": "blue",
+    "choices": [
+      {
+        "colorId": "blue",
+        "label": "Blue",
+        "color": "#3b82f6",
+        "trackId": "Accident1.mp3",
+        "trackLabel": "Accident1",
+        "trackUrl": "/audio/CitySounds/Accident1.mp3"
+      },
+      {
+        "colorId": "yellow",
+        "label": "Yellow",
+        "color": "#eab308",
+        "trackId": "Monkey-002.mp3",
+        "trackLabel": "Monkey-002",
+        "trackUrl": "/audio/NatureSounds/Monkey-002.mp3"
+      }
+    ],
+    "correctChoiceIndex": 0,
+    "iterationDurationMs": 10000,
+    "barCycleDurationMs": 900,
+    "barStartProgress": 0.31
+  }
+}
 ```
 
 Reset score and revive:
@@ -694,7 +752,10 @@ Key behavior:
 
 - Each round has exactly two choices.
 - One choice always matches `assignedColorId`.
-- `greenness = 1 - abs(2 * t - 1)`, where `t` is round progress from `0..1`.
+- Each choice also carries `trackId`, `trackLabel`, and `trackUrl`.
+- `greenness = 1 - abs(2 * t - 1)`, where `t` is the moving ping-pong bar position from `0..1`.
+- `barCycleDurationMs` controls the full left-to-right-to-left loop.
+- `barStartProgress` is randomized per round.
 - Correct choices add `maxReward * greenness`.
 - Wrong choices subtract `lerp(minWrongPenalty, maxWrongPenalty, greenness)`.
 - No press before timeout subtracts `missPenalty`.

@@ -252,9 +252,26 @@ Browser limitations:
 - `agent-browser` text snapshots do not provide a reliable frame-by-frame assertion for the moving marker position, so the controller preview interpolation was validated through the live UI plus code inspection rather than a textual pixel diff.
 - Browser automation cannot assert audible playback output directly, so the local smoke verified linked track labels and URLs in state/UI rather than waveform output.
 
+## Production API Smoke Test
+
+Environment: `https://artinstallation.certaindragon3.work`
+Date: 2026-04-22
+Evidence: [phase12-production-api-smoke-2026-04-22.md](/Users/huangjiesen/大四/s4/G哥项目/art-installation-control/docs/phase12_final_polish/evidence/phase12-production-api-smoke-2026-04-22.md)
+
+Summary:
+
+- Real production smoke covered health/config endpoints, controller command validation, legacy command compatibility, vote export, timing export, economy request-play behavior, Color Challenge export, scoreboard export, and offline receiver cleanup.
+- Screenshot evidence was captured for controller state, vote UI, timing/tracks UI, economy-disabled free play, and Color Challenge.
+- Most live production behavior matched the final professor-facing API docs and Phase 12 closeout.
+- One production issue was found: `POST /api/unity/register` exported `socketServerUrl` with `http://` instead of `https://` behind the reverse proxy.
+- The fix is now in [server/_core/app.ts](/Users/huangjiesen/大四/s4/G哥项目/art-installation-control/server/_core/app.ts:90) with test coverage in [server/controllerApi.test.ts](/Users/huangjiesen/大四/s4/G哥项目/art-installation-control/server/controllerApi.test.ts:2062), but it still requires redeploy before production is fully clean.
+
 ## Deployment / Runtime Notes
 
-- No Zeabur deployment was run for Phase 12. The changes were local UI/runtime refinements and did not touch the deployment chain, Dockerfile, static asset hosting, `PORT`, or reverse-proxy behavior.
+- A live Zeabur smoke was run after deployment at `https://artinstallation.certaindragon3.work`.
+- That production smoke found one reverse-proxy issue in the Unity registration metadata path: exported `socketServerUrl` used `http://` instead of the public `https://` origin.
+- The root cause was missing Express proxy trust. The local code now sets `app.set("trust proxy", true)`, and `/api/unity/register` has coverage for `x-forwarded-proto: https`.
+- Production should be redeployed once with this fix before considering the live API validation fully closed.
 - Single-replica deployment remains required because Socket.IO state is still in-memory and authoritative in one Node process.
 
 ## Remaining Gaps / Follow-Up
@@ -262,3 +279,4 @@ Browser limitations:
 - Professor-provided extra audio assets and updated classroom map artwork were not yet available in the repository during this phase.
 - Audio-link smoke covered metadata visibility and local button wiring, but not human-perceived loudness / mix balance across real devices.
 - Controller preview interpolation is now wired to the same movement timestamps as the receiver, but a dedicated visual regression harness does not exist yet for animated map verification.
+- Production validation is functionally complete except for the Unity registration origin fix, which still needs a redeploy pass and a one-line live recheck.

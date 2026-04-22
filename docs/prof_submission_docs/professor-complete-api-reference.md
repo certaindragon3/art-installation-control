@@ -1,10 +1,10 @@
 # Professor Unity API Reference
 
-Date verified: 2026-04-21
+Date verified: 2026-04-22
 
 Scope:
-- Consolidates all shipped non-optional work from Phase 1, 2, 3, 4, 5, 6, 8, 9, 10, and 11.
-- Reconciles early-phase docs against the current codebase, so this file is the professor-facing source of truth.
+- Consolidates all shipped non-optional work from Phase 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, and 12.
+- Reconciles early-phase docs against the current codebase, so this file is the final professor-facing source of truth after Phase 12 polish.
 - Phase 7 optional features are intentionally excluded.
 
 Related docs:
@@ -183,7 +183,7 @@ Returns all color challenge result events currently kept in memory.
 
 ### `GET /api/controller/scoreboard/export`
 
-Returns the current per-receiver score snapshot, including economy remaining seconds and score-system values.
+Returns the current per-receiver combined economy + score snapshot, including economy remaining seconds and the Color Challenge score-system values. The controller button labeled `Download Economy + Score CSV` uses this endpoint.
 
 ### `POST /api/unity/register`
 
@@ -608,12 +608,13 @@ Example:
 Behavior:
 - Numeric economy fields clamp to `>= 0`.
 - `refreshIntervalMs` clamps to `>= 1000`.
-- `enabled: false` stops all tracks.
+- `enabled: false` pauses economy cost / earnings / inflation checks, but it does not by itself stop current playback or block `request_track_play`.
 - `gameOver: true` stops all tracks.
 - Inflation compounds from the current multiplier over elapsed real time.
 - Economy stays off until you explicitly set `enabled: true`.
 - Cost is `track.basePrice * economy.inflation`.
 - If a track does not define `basePrice`, the current runtime falls back to `durationSeconds` for backward compatibility.
+- When economy is off, `request_track_play` still requires a visible, enabled, playable track with a valid URL and duration.
 
 #### `module: "colorChallenge"`
 
@@ -671,6 +672,43 @@ Behavior:
 - Palette updates require at least two unique colors.
 - `assignedColorId` must exist in the active palette or it is ignored.
 - `visible: true` and `enabled: true` start a round when the receiver is not game over.
+- Active round snapshots also include choice-linked track metadata plus the moving-bar timing fields `barCycleDurationMs` and `barStartProgress`.
+- `greenness` is computed from the ping-pong bar position, not from simple linear round progress.
+
+Active round snapshot example:
+
+```json
+{
+  "colorChallenge": {
+    "visible": true,
+    "enabled": true,
+    "assignedColorId": "blue",
+    "choices": [
+      {
+        "colorId": "blue",
+        "label": "Blue",
+        "color": "#3b82f6",
+        "trackId": "track_02",
+        "trackLabel": "Womp Womp",
+        "trackUrl": "/audio/womp-womp.mp3"
+      },
+      {
+        "colorId": "yellow",
+        "label": "Yellow",
+        "color": "#eab308",
+        "trackId": "Crowd2.mp3",
+        "trackLabel": "Crowd2",
+        "trackUrl": "/audio/CitySounds/Crowd2.mp3"
+      }
+    ],
+    "correctChoiceIndex": 0,
+    "iterationStartedAt": "2026-04-21T13:06:41.900Z",
+    "iterationDurationMs": 10000,
+    "barCycleDurationMs": 900,
+    "barStartProgress": 0.31
+  }
+}
+```
 
 ### 7. `set_vote_state`
 
@@ -791,21 +829,20 @@ Example:
 ```
 
 Preconditions:
-- Economy enabled.
-- Receiver not game over.
 - No vote lock.
 - Track exists, is visible, enabled, playable, and has a URL plus positive `durationSeconds`.
 - No other track is currently playing.
-- Receiver can afford the track cost.
+- If economy is enabled, the receiver must not be game over and must be able to afford the track cost.
 
 On success:
-- Deducts cost from `currencySeconds`.
+- If economy is enabled, deducts cost from `currencySeconds`.
+- If economy is disabled, playback still starts without spending currency or applying the game-over cost check.
 - Sets `economy.currentTrackId`.
 - Sets `economy.playStartedAt` and `economy.playEndsAt`.
 - Sets that track `playing: true`.
+- Clears `economy.gameOver` and `economy.lastError`.
 
 Typical failure values for `economy.lastError`:
-- `economy_disabled`
 - `game_over`
 - `vote_lock`
 - `track_hidden`
@@ -816,11 +853,12 @@ Typical failure values for `economy.lastError`:
 
 Default tuning note:
 - The shipped defaults keep economy disabled until the professor/operator enables it.
+- While economy is disabled, the same request path still works for free playback.
 - After enablement, the default idle earnings and compounding inflation still make even the cheapest track unaffordable at about 3 minutes.
 
 ### 12. `request_track_stop`
 
-Stops the currently playing economy track.
+Stops the currently playing receiver track tracked by the playback state.
 
 Example:
 
@@ -876,7 +914,34 @@ Example:
     "submissionId": "color-submit-456",
     "choiceIndex": 0,
     "colorId": "green",
-    "pressedAt": "2026-04-21T02:10:40.000Z"
+    "pressedAt": "2026-04-21T13:06:41.900Z",
+    "nextRound": {
+      "iterationId": "color-round-124",
+      "assignedColorId": "blue",
+      "choices": [
+        {
+          "colorId": "blue",
+          "label": "Blue",
+          "color": "#3b82f6",
+          "trackId": "Accident1.mp3",
+          "trackLabel": "Accident1",
+          "trackUrl": "/audio/CitySounds/Accident1.mp3"
+        },
+        {
+          "colorId": "yellow",
+          "label": "Yellow",
+          "color": "#eab308",
+          "trackId": "Monkey-002.mp3",
+          "trackLabel": "Monkey-002",
+          "trackUrl": "/audio/NatureSounds/Monkey-002.mp3"
+        }
+      ],
+      "correctChoiceIndex": 0,
+      "iterationStartedAt": "2026-04-21T13:06:41.900Z",
+      "iterationDurationMs": 10000,
+      "barCycleDurationMs": 900,
+      "barStartProgress": 0.31
+    }
   }
 }
 ```
@@ -886,9 +951,14 @@ Optional fields:
 - `nextRound`
 
 Behavior:
-- `roundId` should match the current `config.colorChallenge.iterationId`.
+- `roundId` should match the current `config.colorChallenge.iterationId` when provided.
 - `choiceIndex` may be `0`, `1`, or `null` for a timeout miss.
+- If `colorId` is provided for a pressed choice, it must match the selected choice's `colorId`.
 - `pressedAt` future times are clamped to server receive time.
+- If `nextRound` is provided, include `roundId`; otherwise the server ignores the proposal and generates the next round itself.
+- `nextRound` proposals may include `choices[].trackId`, `trackLabel`, `trackUrl`, `barCycleDurationMs`, and `barStartProgress`.
+- The server canonicalizes any provided next-round track metadata against the current receiver track list.
+- `greenness` is evaluated from the ping-pong bar position at the resolved press time.
 - If the receiver survives the round, the server starts the next round automatically.
 
 ### 15. `color_challenge_reset`
@@ -917,7 +987,7 @@ Behavior:
 
 `GET /api/controller/scoreboard/export`
 
-This is the current score snapshot endpoint. It is intended for the professor / Unity side when a spreadsheet-style record of the latest results is needed instead of raw event logs. The controller UI `Download Score CSV` button uses this endpoint and converts the JSON into CSV.
+This is the current combined economy + score snapshot endpoint. It is intended for the professor / Unity side when a spreadsheet-style record of the latest results is needed instead of raw event logs. The controller UI `Download Economy + Score CSV` button uses this endpoint and converts the JSON into CSV.
 
 Returns:
 
@@ -1025,6 +1095,11 @@ Returns:
 }
 ```
 
+Field notes:
+
+- Every event includes `choices[]`, and each choice now carries `trackId`, `trackLabel`, and `trackUrl`.
+- Result fields include `t`, `greenness`, `scoreDelta`, `gameOver`, and `submissionId`.
+
 ## Legacy Compatibility Commands
 
 These are still accepted by `POST /api/controller/command`, but they are only recommended for the old two-track demo workflow.
@@ -1088,8 +1163,11 @@ Compatibility notes:
 ## Practical Integration Notes
 
 - Use `set_visible_tracks` to control what students are allowed to choose.
-- Use `request_track_play` and `request_track_stop` for the final receiver-led playback economy.
+- Use `request_track_play` and `request_track_stop` for the final receiver-led playback flow.
+- When economy is off, `request_track_play` still works as free playback for visible playable tracks.
 - Keep `set_track_state.playing` only for operator debugging or manual override.
 - Keep groups only if the Unity workflow explicitly still needs them. They are supported, but not the main post-Phase-8 student workflow.
 - Timing is synchronized to the shared pulse clock, not to currently playing audio files.
 - Map movement is segment-based and browser-interpolated. Unity should not send one position every frame.
+- Color Challenge snapshots and exports now expose linked track labels / URLs plus the ping-pong timing-bar fields.
+- Score download is the combined `GET /api/controller/scoreboard/export` snapshot, not a separate economy-only or score-only route.

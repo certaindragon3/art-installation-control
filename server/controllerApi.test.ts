@@ -2059,6 +2059,19 @@ describe("controller HTTP API", () => {
     });
   });
 
+  it("honors forwarded proto when exporting Unity socket metadata", async () => {
+    const unityResponse = await fetch(`${baseUrl}/api/unity/register`, {
+      method: "POST",
+      headers: {
+        "x-forwarded-proto": "https",
+      },
+    });
+    const unityBody = await unityResponse.json();
+
+    expect(unityResponse.status).toBe(200);
+    expect(unityBody.socketServerUrl).toBe(baseUrl.replace("http://", "https://"));
+  });
+
   it("forwards receiver interaction events to Unity sockets", async () => {
     const receiver = await connectSocket(baseUrl);
     const unity = await connectSocket(baseUrl);
